@@ -2,40 +2,52 @@ import regex as re
 
 
 class BPETokenizer:
-    PATTERN = re.compile(r""" # Compile the regex pattern for fast use
-                        '(?i:[sdmt]|ll|ve|re)      # Match common English contractions, e.g. 's, 'd, 'll, etc.
-                        |[^\r\n\p{L}\p{N}]?\p{L}+  # Match sequences of letters with an optional leading character like a space
-                        |\p{N}{1,3}                # Match sequences of 1 to 3 digits
-                        |\ ?[^\s\p{L}\p{N}]+[\r\n]* # Match characters that are letters, whitespaces or digits, followed by optional newlines, e.g. "..."
-                        |\s*[\r\n]+|\s+(?!\S)|\s+  # Match newlines and whitespace sequences
-                    """, re.X) # Allow comments and whitespace in the regex pattern
-
-    def __init__(self, text_file: str, vocab_size: int) -> None:
+    def __init__(self, text_file: str, vocab_size: int, special_tokens: dict = None) -> None:
         self.num_bytes = 256
-        self.text = self._load_text(text_file)
         self.vocab_size = vocab_size
-        self.vocab = {i: bytes([i]) for i in range(self.num_bytes)} # Initialize vocab with byte values
-        self.merges = {}
+        self.text = self._load_text(text_file)
+        
+        self.special_tokens = special_tokens if special_tokens is not None else {"<|endoftext|>": vocab_size}
+        self.vocab = {i: bytes([i]) for i in range(self.num_bytes)} # Initialize the vocabulary with byte tokens (0-255)
+        for token, token_id in self.special_tokens.items(): # Add special tokens to the vocabulary
+            self.vocab[token_id] = token.encode('utf-8')
+
+        self.merges = {} 
+        self._init_regex() # Compile the regex pattern with special tokens
 
     def train(self):
         """Train the BPE tokenizer on the input text."""
         text_chunks = self._pre_process(self.text)
+        byte_chunks = [list(
+            chunk.encode('utf-8'))
+            for chunk in text_chunks
+            if chunk not in self.special_tokens
+        ] # Encode the text chunks into byte sequences, excluding special tokens
+
         for i in range(self.vocab_size - self.num_bytes): # Account for the initial 256 byte tokens
-            best_pair = self._find_pair(text_chunks) # Find the most frequent pair of tokens
+            best_pair = self._find_pair(byte_chunks) # Find the most frequent pair of tokens
             if not best_pair:
                 break
 
             new_token_id = self.num_bytes + i
             self.vocab[new_token_id] = self.vocab[best_pair[0]] + self.vocab[best_pair[1]] # merge characters of the best pair into a single new token
             self.merges[new_token_id] = best_pair # Store the merge operation
-            text_chunks = self._merge_pair(text_chunks, best_pair, new_token_id)
+            byte_chunks = self._merge_pair(byte_chunks, best_pair, new_token_id)
 
     def encode(self, text: str) -> list:
         """Encode the input text into a sequence of token IDs."""
         text_chunks = self._pre_process(text)
-        for new_id, pair in self.merges.items():
-            text_chunks = self._merge_pair(text_chunks, pair, new_id)
-        return [token for chunk in text_chunks for token in chunk] # unwrap the chunks
+
+        token_ids = []
+        for chunk in text_chunks:
+            if chunk in self.special_tokens: # If the chunk is a special token, add its ID directly
+                token_ids.append(self.special_tokens[chunk])
+            else: # Otherwise, encode the chunk into bytes and apply merges to get the final token IDs
+                byte_chunk = list(chunk.encode('utf-8')) 
+                for new_id, pair in self.merges.items():
+                    byte_chunk = self._merge_pair([byte_chunk], pair, new_id)[0] # Merge the chunk according to the learned merges
+                token_ids.extend(byte_chunk) # Add the final token IDs for the chunk
+        return token_ids
 
     def decode(self, token_ids: list) -> str:
         """Decode a sequence of token IDs back into text."""
@@ -70,12 +82,43 @@ class BPETokenizer:
         return new_text_chunks
 
     def _pre_process(self, text: str) -> list:
-        """Apply regex patterns to clean the text and turn into UTF-8."""
-        chunks = re.findall(self.PATTERN, text)
-        byte_chunks = [list(chunk.encode('utf-8')) for chunk in chunks]
-        return byte_chunks
+        """Apply regex patterns to clean the text and text chunks."""
+        if not self.special_pattern:
+            return self.pattern.findall(text)
+        
+        text_chunks = []
+        for part in re.split(self.special_pattern, text): # Split the text by special tokens
+            if not part: # Skip empty parts
+                continue
+            if part in self.special_tokens: # If the part is a special token, add it directly
+                text_chunks.append(part)
+            else: # Otherwise, apply the regex pattern to extract text chunks
+                text_chunks.extend(self.pattern.findall(part))
+        return text_chunks
 
     def _load_text(self, text_file: str) -> str:
         """Load text from a file."""
         with open(text_file, "r", encoding="utf-8") as f:
             return f.read()
+
+    def _init_regex(self):
+        self.pattern = re.compile(r"""               # Compile the regex pattern for fast use
+                    |'(?i:[sdmt]|ll|ve|re)           # Match common English contractions, e.g. 's, 'd, 'll, etc.
+                    |[^\r\n\p{L}\p{N}]?\p{L}+        # Match sequences of letters with an optional leading character like a space
+                    |\p{N}{1,3}                      # Match sequences of 1 to 3 digits
+                    |\ ?[^\s\p{L}\p{N}]+[\r\n]*      # Match characters that are letters, whitespaces or digits, followed by optional newlines, e.g. "..."
+                    |\s*[\r\n]+|\s+(?!\S)|\s+        # Match newlines and whitespace sequences
+                """, re.X) # Allow comments and whitespace in the regex pattern
+        
+        if self.special_tokens:
+            escaped_specials = [re.escape(token) for token in self.special_tokens.keys()]
+            self.special_pattern = re.compile(f"({'|'.join(escaped_specials)})") # Add parentheses to keep the delimiter in the split
+        else:
+            self.special_pattern = None
+        
+    @property
+    def eot_token(self):
+        """Return the end-of-text token ID."""
+        if "<|endoftext|>" in self.special_tokens:
+            return self.special_tokens["<|endoftext|>"]
+        return None
