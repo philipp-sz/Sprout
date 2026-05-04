@@ -24,4 +24,6 @@ Thumbs.db
 .idea/
 
 # Data
-data/
+shards/
+*.npy
+metadata.json
