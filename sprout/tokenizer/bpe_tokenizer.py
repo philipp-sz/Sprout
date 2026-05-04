@@ -1,4 +1,7 @@
+import json
+
 import regex as re
+from datasets import load_dataset
 
 
 class BPETokenizer:
@@ -15,7 +18,7 @@ class BPETokenizer:
         self.merges = {} 
         self._init_regex() # Compile the regex pattern with special tokens
 
-    def train(self):
+    def train(self) -> None:
         """Train the BPE tokenizer on the input text."""
         text_chunks = self._pre_process(self.text)
         byte_chunks = [list(
@@ -53,6 +56,33 @@ class BPETokenizer:
         """Decode a sequence of token IDs back into text."""
         byte_string = b"".join(self.vocab[id] for id in token_ids)
         return byte_string.decode("utf-8")
+
+    def store_tokenizer_state(self, path: str) -> None:
+        """Store the tokenizer's vocabulary, merges and configuration to a file."""
+        hex_vocab = {id: byte_value.hex() for id, byte_value in self.vocab.items()}
+        state = {
+            "vocab": hex_vocab,
+            "merges": self.merges,
+            "special_tokens": self.special_tokens,
+            "vocab_size": self.vocab_size
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=4)
+
+    @classmethod
+    def load_tokenizer_state(cls, path: str) -> None:
+        """Load the tokenizer's vocabulary, merges and configuration from a file."""
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+
+        instance = cls.__new__(cls) # Create an uninitialized instance of the class
+        instance.vocab = {int(id): bytes.fromhex(hex_value) for id, hex_value in state["vocab"].items()}
+        instance.merges = {int(new_id): tuple(pair) for new_id, pair in state["merges"].items()} # Ensure correct types
+        instance.special_tokens = state["special_tokens"]
+        instance.vocab_size = state["vocab_size"]
+        instance.num_bytes = 256
+        instance._init_regex() # Re-initialize the regex patterns
+        return instance
 
     def _find_pair(self, text_chunks: list) -> tuple:
         """Find the most frequent pair of tokens in the text."""
@@ -101,7 +131,7 @@ class BPETokenizer:
         with open(text_file, "r", encoding="utf-8") as f:
             return f.read()
 
-    def _init_regex(self):
+    def _init_regex(self) -> None:
         self.pattern = re.compile(r"""               # Compile the regex pattern for fast use
                     |'(?i:[sdmt]|ll|ve|re)           # Match common English contractions, e.g. 's, 'd, 'll, etc.
                     |[^\r\n\p{L}\p{N}]?\p{L}+        # Match sequences of letters with an optional leading character like a space
@@ -117,8 +147,27 @@ class BPETokenizer:
             self.special_pattern = None
         
     @property
-    def eot_token(self):
+    def eot_token(self) -> int | None:
         """Return the end-of-text token ID."""
         if "<|endoftext|>" in self.special_tokens:
             return self.special_tokens["<|endoftext|>"]
         return None
+    
+if __name__ == "__main__":
+    vocab_size = 32_768
+    num_docs = 200_000
+    dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
+    training_data_path = "./training_data.txt"
+    ds = load_dataset(dataset_id, split="train", streaming=True)
+    ds_iter = iter(ds)
+
+    num_docs_written = 0
+    with open(training_data_path, "w", encoding="utf-8") as f:
+        while num_docs_written < num_docs:
+            row = next(ds_iter)
+            f.write(row["text"] + "\n")
+            num_docs_written += 1
+
+    tokenizer = BPETokenizer(training_data_path, vocab_size=vocab_size)
+    tokenizer.train()
+    tokenizer.store_tokenizer_state("./bpe_tokenizer_state.json")    

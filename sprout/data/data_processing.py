@@ -27,7 +27,7 @@ class DatasetProcessor:
         self.shard_size = shard_size
         self.num_tokens = num_tokens
 
-    def process(self):
+    def process(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         metadata = self.load_metadata() # Load or create metadata 
 
@@ -64,7 +64,7 @@ class DatasetProcessor:
             row_count += 1
         return row_count, len(buffer)
 
-    def load_metadata(self):
+    def load_metadata(self) -> dict:
         path = Path(self.metadata_path)     
         default_metadata = {
             "project_state": {
@@ -84,7 +84,7 @@ class DatasetProcessor:
             metadata = json.load(f)
         return metadata
     
-    def _update_metadata(self, metadata, row_count, token_count):
+    def _update_metadata(self, metadata: dict, row_count: int, token_count: int) -> None:
         # Update metadata with the new cumulative counts and shard information
         metadata["project_state"]["num_total_rows"] += row_count
         metadata["project_state"]["num_total_tokens"] += token_count
@@ -96,7 +96,7 @@ class DatasetProcessor:
         with open(self.metadata_path, "w") as f:
             json.dump(metadata, f, indent=4)
 
-    def _save_shard(self, shard_idx, tokenized_data):
+    def _save_shard(self, shard_idx: int, tokenized_data: list) -> None:
         shard_path = self.output_dir / f"shard_{shard_idx:06}.npy"
         arr = np.array(tokenized_data, dtype=np.uint16) 
         np.save(shard_path, arr)
@@ -111,7 +111,7 @@ class TokenDataLoader:
     device (str): The device to load the batches onto ("cpu" or "cuda").
     split (str): The dataset split to load ("train", "val")
     """
-    def __init__(self, shards_dir: str, batch_size: int, seq_len: int, device: str, split: str = "train"):
+    def __init__(self, shards_dir: str, batch_size: int, seq_len: int, device: str, split: str = "train") -> None:
         self.shards_dir = shards_dir
         self.batch_size = batch_size
         self.seq_len = seq_len
@@ -121,7 +121,7 @@ class TokenDataLoader:
         self.shard_iterator = self._get_shard_iterator() # Create an iterator for the shard files
         self._load_next_shard() # Load the first shard of token IDs to start
 
-    def _get_shard_iterator(self):
+    def _get_shard_iterator(self) -> iter:
         shard_files = sorted(Path(self.shards_dir).glob("shard_*.npy")) # sort list of shard files
         if self.split == "val": # If validation data, only use the first shard for validation
             shard_files = shard_files[:1]
@@ -133,14 +133,14 @@ class TokenDataLoader:
         for shard_file in shard_files:
             yield np.load(shard_file) # Yield each shard as a numpy array of token IDs
 
-    def _load_next_shard(self):
+    def _load_next_shard(self) -> None:
         try:
             self.shard_tokens = next(self.shard_iterator) # Load the next shard of token IDs
             self.cur_pos = 0 # Reset the current position in the shard
         except StopIteration:
             raise RuntimeError("No more shards available to load.")
 
-    def get_batch(self):
+    def get_batch(self) -> tuple:
         B, T = self.batch_size, self.seq_len
         if self.cur_pos + B * T + 1 > len(self.shard_tokens):
             self._load_next_shard() # Skip to the next shard if the current shard does not have enough tokens for the batch
@@ -152,19 +152,14 @@ class TokenDataLoader:
         self.cur_pos += B * T 
         return x, y
 
-    
-        
-
-
-
-# if __name__ == "__main__":
-#     shard_size = 100_000_000
-#     num_tokens = 2_500_000_000
-#     dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
-#     metadata_path = "./metadata.json"
-#     output_dir = "./shards"
-#     tokenizer = BPETokenizer()
-#     processor = DatasetProcessor(dataset_id, metadata_path, output_dir, tokenizer, shard_size, num_tokens)
-#     processor.process()
+if __name__ == "__main__":
+    shard_size = 100_000_000
+    num_tokens = 2_500_000_000
+    dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
+    metadata_path = "./metadata.json"
+    output_dir = "./shards"
+    tokenizer = BPETokenizer()
+    processor = DatasetProcessor(dataset_id, metadata_path, output_dir, tokenizer, shard_size, num_tokens)
+    processor.process()
 
     
