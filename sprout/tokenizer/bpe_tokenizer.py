@@ -1,7 +1,7 @@
 import json
 
+from tqdm import trange
 import regex as re
-from datasets import load_dataset
 
 
 class BPETokenizer:
@@ -27,7 +27,7 @@ class BPETokenizer:
             if chunk not in self.special_tokens
         ] # Encode the text chunks into byte sequences, excluding special tokens
 
-        for i in range(self.vocab_size - self.num_bytes): # Account for the initial 256 byte tokens
+        for i in trange(self.vocab_size - self.num_bytes, desc="Training BPE"): # Account for the initial 256 byte tokens
             best_pair = self._find_pair(byte_chunks) # Find the most frequent pair of tokens
             if not best_pair:
                 break
@@ -155,18 +155,7 @@ class BPETokenizer:
     
 if __name__ == "__main__":
     vocab_size = 32_768
-    num_docs = 200_000
-    dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
     training_data_path = "./training_data.txt"
-    ds = load_dataset(dataset_id, split="train", streaming=True)
-    ds_iter = iter(ds)
-
-    num_docs_written = 0
-    with open(training_data_path, "w", encoding="utf-8") as f:
-        while num_docs_written < num_docs:
-            row = next(ds_iter)
-            f.write(row["text"] + "\n")
-            num_docs_written += 1
 
     tokenizer = BPETokenizer(training_data_path, vocab_size=vocab_size)
     tokenizer.train()

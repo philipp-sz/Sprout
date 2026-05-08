@@ -2,3 +2,4 @@ regex
 datasets
 numpy
 torch
+tqdm
