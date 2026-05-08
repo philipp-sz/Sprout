@@ -133,7 +133,7 @@ class BPETokenizer:
 
     def _init_regex(self) -> None:
         self.pattern = re.compile(r"""               # Compile the regex pattern for fast use
-                    |'(?i:[sdmt]|ll|ve|re)           # Match common English contractions, e.g. 's, 'd, 'll, etc.
+                    '(?i:[sdmt]|ll|ve|re)            # Match common English contractions, e.g. 's, 'd, 'll, etc.
                     |[^\r\n\p{L}\p{N}]?\p{L}+        # Match sequences of letters with an optional leading character like a space
                     |\p{N}{1,3}                      # Match sequences of 1 to 3 digits
                     |\ ?[^\s\p{L}\p{N}]+[\r\n]*      # Match characters that are letters, whitespaces or digits, followed by optional newlines, e.g. "..."
