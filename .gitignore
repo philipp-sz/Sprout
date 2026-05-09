@@ -28,3 +28,4 @@ shards/
 *.npy
 metadata.json
 training_data.txt
+bpe_tokenizer_state.json

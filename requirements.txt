@@ -3,3 +3,4 @@ datasets
 numpy
 torch
 tqdm
+pytest
