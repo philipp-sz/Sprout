@@ -7,7 +7,7 @@ import regex as re
 
 
 class Node:
-    __slots__ = ("prev", "val", "next")
+    __slots__ = ("prev", "val", "next") # Reduce memory overhead by defining fixed attributes
 
     def __init__(self, val):
         self.prev = None
@@ -15,22 +15,25 @@ class Node:
         self.next = None
 
 class FastBPETokenizer:
-    def __init__(self, text_file: str, vocab_size: int, special_tokens: dict = None) -> None:
-        self.num_bytes = 256
+    _NUM_BYTES = 256
+    
+    def __init__(self, vocab_size: int, special_tokens: dict | None = None) -> None:
         self.vocab_size = vocab_size
-        self.text = self._load_text(text_file)
         
         self.special_tokens = special_tokens if special_tokens is not None else {"<|endoftext|>": vocab_size}
-        self.vocab = {i: bytes([i]) for i in range(self.num_bytes)} # Initialize the vocabulary with byte tokens (0-255)
+        self.vocab = {i: bytes([i]) for i in range(self._NUM_BYTES)} # Initialize the vocabulary with byte tokens (0-255)
         for token, token_id in self.special_tokens.items(): # Add special tokens to the vocabulary
             self.vocab[token_id] = token.encode('utf-8')
 
         self.merges = {} 
         self._init_regex() # Compile the regex pattern with special tokens
 
-    def train(self) -> None:
+    def train(self, text_file: str) -> None:
         """Train the BPE tokenizer on the input text."""
-        text_chunks = self._pre_process(self.text)
+        with open(text_file, "r", encoding="utf-8") as f:
+            text = f.read()     
+
+        text_chunks = self._pre_process(text)
         byte_chunks = [list(
             chunk.encode('utf-8'))
             for chunk in text_chunks
@@ -43,37 +46,42 @@ class FastBPETokenizer:
         for pair, count in pair_counts.items(): # Create initial frequency heap
             self._heap_push(heap, pair, count)
 
-        for i in trange(self.vocab_size - self.num_bytes, desc="Training BPE"):
+        for i in trange(self.vocab_size - self._NUM_BYTES, desc="Training BPE"):
             best_pair, best_count = self._heap_pop(heap, pair_counts)
-            if not best_pair or best_count == 0: # If no valid pairs are left, stop training
+            if not best_pair or best_count < 2: # If no valid pairs are left, stop training
                 break
 
-            new_token_id = self.num_bytes + i
+            new_token_id = self._NUM_BYTES + i
             self.vocab[new_token_id] = self.vocab[best_pair[0]] + self.vocab[best_pair[1]]
             self.merges[new_token_id] = best_pair
-            self._merge_pair(best_pair, pair_counts, pair_positions, new_token_id, heap) # Merge the best pair and update stats            
+            self._merge_pair(best_pair, pair_counts, pair_positions, new_token_id, heap) # Merge the best pair and update stats
 
-    # def encode(self, text: str) -> list:
-    #     """Encode the input text into a sequence of token IDs."""
-    #     text_chunks = self._pre_process(text)
+    def encode(self, text: str) -> list[int]:
+        """Encode the input text into a sequence of token IDs."""
+        text_chunks = self._pre_process(text)
+        token_ids = []
+        for chunk in text_chunks:
+            if chunk in self.special_tokens:
+                token_ids.append(self.special_tokens[chunk])
+            else:
+                byte_chunk = list(chunk.encode('utf-8'))
+                for new_id, pair in self.merges.items():
+                    idx = 0
+                    while idx < len(byte_chunk) - 1:
+                        if (byte_chunk[idx], byte_chunk[idx + 1]) == pair:
+                            byte_chunk[idx] = new_id
+                            del byte_chunk[idx + 1]
+                        else:
+                            idx += 1
+                token_ids.extend(byte_chunk)
+        return token_ids
+    
+    def decode(self, token_ids: list[int]) -> str:
+        """Decode a sequence of token IDs back into text."""
+        byte_string = b"".join(self.vocab[id] for id in token_ids)
+        return byte_string.decode("utf-8", errors="replace")
 
-    #     token_ids = []
-    #     for chunk in text_chunks:
-    #         if chunk in self.special_tokens: # If the chunk is a special token, add its ID directly
-    #             token_ids.append(self.special_tokens[chunk])
-    #         else: # Otherwise, encode the chunk into bytes and apply merges to get the final token IDs
-    #             byte_chunk = list(chunk.encode('utf-8')) 
-    #             for new_id, pair in self.merges.items():
-    #                 byte_chunk = self._merge_pair([byte_chunk], pair, new_id)[0] # Merge the chunk according to the learned merges
-    #             token_ids.extend(byte_chunk) # Add the final token IDs for the chunk
-    #     return token_ids
-
-    # def decode(self, token_ids: list) -> str:
-    #     """Decode a sequence of token IDs back into text."""
-    #     byte_string = b"".join(self.vocab[id] for id in token_ids)
-    #     return byte_string.decode("utf-8")
-
-    def store_tokenizer_state(self, path: str) -> None:
+    def save(self, path: str) -> None:
         """Store the tokenizer's vocabulary, merges and configuration to a file."""
         hex_vocab = {id: byte_value.hex() for id, byte_value in self.vocab.items()}
         state = {
@@ -86,7 +94,7 @@ class FastBPETokenizer:
             json.dump(state, f, indent=4)
 
     @classmethod
-    def load_tokenizer_state(cls, path: str) -> None:
+    def load(cls, path: str) -> "FastBPETokenizer":
         """Load the tokenizer's vocabulary, merges and configuration from a file."""
         with open(path, "r", encoding="utf-8") as f:
             state = json.load(f)
@@ -96,11 +104,11 @@ class FastBPETokenizer:
         instance.merges = {int(new_id): tuple(pair) for new_id, pair in state["merges"].items()} # Ensure correct types
         instance.special_tokens = state["special_tokens"]
         instance.vocab_size = state["vocab_size"]
-        instance.num_bytes = 256
+        instance._NUM_BYTES = 256
         instance._init_regex() # Re-initialize the regex patterns
         return instance
     
-    def _build_linked_list(self, byte_chunks: list) -> list:
+    def _build_linked_list(self, byte_chunks: list[list[int]]) -> list:
         """Build a doubly linked list from a list of tokens and return the heads of the linked lists for each chunk."""
         chunk_heads = []
         for chunk in byte_chunks:
@@ -115,7 +123,7 @@ class FastBPETokenizer:
             chunk_heads.append(head)
         return chunk_heads
 
-    def _build_stats(self, chunk_heads: list) -> tuple:
+    def _build_stats(self, chunk_heads: list[Node]) -> tuple:
         """Build a frequency dictionary for pairs of tokens and a mapping for their positions in the linked lists."""
         pair_counts = {}
         pair_positions = defaultdict(set)
@@ -148,11 +156,11 @@ class FastBPETokenizer:
         node_b.prev = node_b.next = None
         return node_c
 
-    def _heap_push(self, heap: list, pair: tuple, count: int) -> None:
+    def _heap_push(self, heap: list, pair: tuple[int, int], count: int) -> None:
         """Push a pair and its count onto the heap."""
         heapq.heappush(heap, (-count, pair)) # Negate count for max-heap behavior
 
-    def _heap_pop(self, heap: list, pair_count: dict) -> tuple:
+    def _heap_pop(self, heap: list, pair_count: dict[tuple[int, int], int]) -> tuple:
         """Pop the heap until a non-stale pair is found."""
         while heap:
             neg_count, pair = heapq.heappop(heap)
@@ -161,7 +169,8 @@ class FastBPETokenizer:
                 return pair, count
         return None, 0
 
-    def _merge_pair(self, best_pair: tuple, pair_counts: dict, pair_positions: dict, new_token_id: int, heap: list) -> list:
+    def _merge_pair(self, best_pair: tuple[int, int], pair_counts: dict[tuple[int, int], int],
+                    pair_positions: dict[tuple[int, int], set[Node]], new_token_id: int, heap: list) -> list:
         """Merge the specified pair in all linked lists and update the frequency and position stats for affected pairs."""
         nodes_to_merge = list(pair_positions[best_pair]) # Get the head nodes of the best pairs
         for node_a in nodes_to_merge:
@@ -193,21 +202,22 @@ class FastBPETokenizer:
         del pair_positions[best_pair]
         del pair_counts[best_pair]
 
-    def _update_stats(self, pair: tuple, pair_counts: dict, pair_positions: dict, heap: list, decrement: bool) -> None:
+    def _update_stats(self, pair: tuple[Node, Node], pair_counts: dict[tuple[int, int], int],
+                      pair_positions: dict[tuple[int, int], set[Node]], heap: list, decrement: bool) -> None:
         """Update the frequency and position stats for a given pair."""
-        head_node = pair[0]
+        left_node = pair[0]
         token_pair = (pair[0].val, pair[1].val) # Get only the token values of the pair
         if decrement:
             pair_counts[token_pair] = pair_counts.get(token_pair, 0) - 1
-            pair_positions[token_pair].discard(token_pair) # Remove the position of the merged pair
+            pair_positions[token_pair].discard(left_node) # Discard the old pair and its node position
             self._heap_push(heap, token_pair, pair_counts[token_pair]) # Push new count onto the heap
-        elif head_node is not None:
-            pair_counts[token_pair] = pair_counts.get(token_pair, 0) + 1 # Decrement or create if pair does not exist yet
-            pair_positions[token_pair].add(head_node) # Add the position of the new pair
+        else:
+            pair_counts[token_pair] = pair_counts.get(token_pair, 0) + 1
+            pair_positions[token_pair].add(left_node) # Add the position of the new pair
             self._heap_push(heap, token_pair, pair_counts[token_pair])
 
-    def _pre_process(self, text: str) -> list:
-        """Apply regex patterns to clean the text and text chunks."""
+    def _pre_process(self, text: str) -> list[str]:
+        """Apply regex patterns to clean the text and return text chunks."""
         if not self.special_pattern:
             return self.pattern.findall(text)
         
@@ -221,14 +231,9 @@ class FastBPETokenizer:
                 text_chunks.extend(self.pattern.findall(part))
         return text_chunks
 
-    def _load_text(self, text_file: str) -> str:
-        """Load text from a file."""
-        with open(text_file, "r", encoding="utf-8") as f:
-            return f.read()
-
     def _init_regex(self) -> None:
         self.pattern = re.compile(r"""               # Compile the regex pattern for fast use
-                    '(?i:[sdmt]|ll|ve|re)           # Match common English contractions, e.g. 's, 'd, 'll, etc.
+                    '(?i:[sdmt]|ll|ve|re)            # Match common English contractions, e.g. 's, 'd, 'll, etc.
                     |[^\r\n\p{L}\p{N}]?\p{L}+        # Match sequences of letters with an optional leading character like a space
                     |\p{N}{1,3}                      # Match sequences of 1 to 3 digits
                     |\ ?[^\s\p{L}\p{N}]+[\r\n]*      # Match characters that are letters, whitespaces or digits, followed by optional newlines, e.g. "..."
@@ -247,12 +252,3 @@ class FastBPETokenizer:
         if "<|endoftext|>" in self.special_tokens:
             return self.special_tokens["<|endoftext|>"]
         return None
-
-
-if __name__ == "__main__":
-    vocab_size = 32_768
-    training_data_path = "./training_data.txt"
-
-    tokenizer = FastBPETokenizer(training_data_path, vocab_size=vocab_size)
-    tokenizer.train()
-    tokenizer.store_tokenizer_state("./bpe_tokenizer_state.json")
