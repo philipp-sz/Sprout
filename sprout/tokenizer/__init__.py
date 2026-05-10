@@ -1,2 +1,2 @@
-from sprout.tokenizer.bpe_tokenizer import BPETokenizer
-from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
+from .bpe_tokenizer import BPETokenizer
+from .fast_bpe_tokenizer import FastBPETokenizer

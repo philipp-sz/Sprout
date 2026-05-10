@@ -41,13 +41,17 @@ class FastBPETokenizer:
         ] # Encode the text chunks into byte sequences, excluding special tokens
         chunk_heads = self._build_linked_list(byte_chunks) # Build linked lists for the byte chunks
         pair_counts, pair_positions = self._build_stats(chunk_heads) # Initial scan to build pair frequency and position mappings
+        # Free memory, chunk_heads is no longer needed after building the stats
+        del text
+        del chunk_heads
+        del byte_chunks
 
         heap = []
         for pair, count in pair_counts.items(): # Create initial frequency heap
             self._heap_push(heap, pair, count)
 
         for i in trange(self.vocab_size - self._NUM_BYTES, desc="Training BPE"):
-            best_pair, best_count = self._heap_pop(heap, pair_counts)
+            best_pair, best_count = self._heap_pop(heap, pair_counts, i)
             if not best_pair or best_count < 2: # If no valid pairs are left, stop training
                 break
 
@@ -160,12 +164,18 @@ class FastBPETokenizer:
         """Push a pair and its count onto the heap."""
         heapq.heappush(heap, (-count, pair)) # Negate count for max-heap behavior
 
-    def _heap_pop(self, heap: list, pair_count: dict[tuple[int, int], int]) -> tuple:
+    def _heap_pop(self, heap: list, pair_counts: dict[tuple[int, int], int], iteration: int) -> tuple:
         """Pop the heap until a non-stale pair is found."""
-        while heap:
+        if iteration > 0 and iteration % 10 == 0: # Periodically rebuild the heap to save memory and remove stale entries
+            heap = []
+            for pair, count in pair_counts.items():
+                if count >= 2:
+                    self._heap_push(heap, pair, count)
+
+        while heap: # Pop until a valid pair is found
             neg_count, pair = heapq.heappop(heap)
             count = -neg_count
-            if pair_count.get(pair, 0) == count: # Check if the pair count is still valid
+            if pair_counts.get(pair, 0) == count: # Check if the pair count is still valid
                 return pair, count
         return None, 0
 

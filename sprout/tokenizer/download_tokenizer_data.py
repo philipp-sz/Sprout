@@ -3,7 +3,7 @@ import os
 from datasets import load_dataset
 
 
-num_docs = 10_000
+num_docs = 15_000
 dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
 training_data_path = "./training_data.txt"
 ds = load_dataset(dataset_id, split="train", streaming=True)

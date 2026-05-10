@@ -1,1 +1,1 @@
-from sprout.tokenizer import BPETokenizer, FastBPETokenizer
+from .tokenizer import BPETokenizer, FastBPETokenizer
