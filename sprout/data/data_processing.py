@@ -3,9 +3,8 @@ from pathlib import Path
 
 import torch
 import numpy as np
+from tqdm import tqdm
 from datasets import load_dataset
-
-from sprout.tokenizer import FastBPETokenizer 
 
 
 class DatasetProcessor:
@@ -28,6 +27,7 @@ class DatasetProcessor:
         self.num_tokens = num_tokens
 
     def process(self) -> None:
+        """Processes the dataset by streaming, tokenizing, and saving in shards while tracking progress in metadata."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         metadata = self.load_metadata() # Load or create metadata 
 
@@ -41,31 +41,26 @@ class DatasetProcessor:
         ds_iter = iter(ds) # Create an iterator for the dataset to stream data row by row
 
         buffer = []
-        while num_total_tokens < self.num_tokens:
-            shard_idx = len(metadata["shards"])
-            tokens_to_process = min(self.shard_size, self.num_tokens - num_total_tokens) # Handle remainder tokens for the last shard
-            row_count, token_count = self.process_shard(ds_iter, buffer, tokens_to_process)
+        with tqdm(total=self.num_tokens, initial=num_total_tokens, desc="Processing Dataset") as pbar:
+            while num_total_tokens < self.num_tokens:
+                shard_idx = len(metadata["shards"])
+                tokens_to_process = min(self.shard_size, self.num_tokens - num_total_tokens) # Handle remainder tokens for the last shard
+                row_count, dataset_exhausted = self._process_shard(ds_iter, buffer, tokens_to_process)
+                actual_tokens_processed = min(tokens_to_process, len(buffer)) # In case the dataset is exhausted, this will be less than tokens_to_process
 
-            # Update metadata with the new cumulative counts and save the shard
-            self._save_shard(shard_idx, buffer[:tokens_to_process]) # Only save tokens_to_process tokens to ensure consistency
-            self._update_metadata(metadata, row_count, token_count)
-            buffer = buffer[tokens_to_process:] # Start the new buffer with any remaining tokens
-            num_total_tokens += token_count
+                # Update metadata with the new cumulative counts and save the shard
+                self._update_metadata(metadata, row_count, actual_tokens_processed)
+                self._save_shard(shard_idx, buffer[:actual_tokens_processed])
+                buffer = buffer[actual_tokens_processed:] # Start the new buffer with any remaining tokens
+                num_total_tokens += actual_tokens_processed
+                pbar.update(actual_tokens_processed)
 
-    def process_shard(self, ds_iter: iter, buffer: list, tokens_needed: int) -> tuple:
-        row_count = 0
-
-        while len(buffer) < tokens_needed:
-            row = next(ds_iter) # Get the next row/sample from the dataset
-            tokens = self.tokenizer.encode(row["text"]) # Tokenize a single row/sample
-            tokens.append(self.tokenizer.eot_token) # Add eot token at the end of each row/sample
-            buffer.extend(tokens)
-
-            row_count += 1
-        return row_count, len(buffer)
+                if dataset_exhausted:
+                    print("Dataset exhausted before reaching the target number of tokens.")
+                    break
 
     def load_metadata(self) -> dict:
-        path = Path(self.metadata_path)     
+        """Loads existing metadata or creates new metadata if it does not exist."""
         default_metadata = {
             "project_state": {
                 "num_total_rows": 0,
@@ -74,17 +69,37 @@ class DatasetProcessor:
             "shards": []
         }
 
-        if not path.exists():
-            with open(path, "w") as f: 
+        if not self.metadata_path.exists() or self.metadata_path.stat().st_size == 0:
+            with open(self.metadata_path, "w") as f: 
                 json.dump(default_metadata, f, indent=4)
             return default_metadata
         
         # If the metadata file already exists, load and return metadata
-        with open(path, "r") as f:
+        with open(self.metadata_path, "r") as f:
             metadata = json.load(f)
         return metadata
+
+    def _process_shard(self, ds_iter: iter, buffer: list, tokens_needed: int) -> tuple:
+        """Processes a shard by tokenizing rows until the required number of tokens is reached."""
+        row_count = 0
+        dataset_exhausted = False
+
+        while len(buffer) < tokens_needed:
+            try: # Handle the case where the dataset runs out of data before reaching the required number of tokens
+                row = next(ds_iter) # Get the next row/sample from the dataset
+                row_count += 1
+            except StopIteration:
+                dataset_exhausted = True
+    
+            tokens = self.tokenizer.encode(row["text"]) # Tokenize a single row/sample
+            tokens.append(self.tokenizer.eot_token) # Add eot token at the end of each row/sample
+            buffer.extend(tokens)
+
+            
+        return row_count, dataset_exhausted
     
     def _update_metadata(self, metadata: dict, row_count: int, token_count: int) -> None:
+        """Updates the metadata with new cumulative counts and shard information after processing a shard."""
         # Update metadata with the new cumulative counts and shard information
         metadata["project_state"]["num_total_rows"] += row_count
         metadata["project_state"]["num_total_tokens"] += token_count
@@ -97,6 +112,7 @@ class DatasetProcessor:
             json.dump(metadata, f, indent=4)
 
     def _save_shard(self, shard_idx: int, tokenized_data: list) -> None:
+        """Saves the tokenized data for a shard as a numpy array file."""
         shard_path = self.output_dir / f"shard_{shard_idx:06}.npy"
         arr = np.array(tokenized_data, dtype=np.uint16) 
         np.save(shard_path, arr)
@@ -117,11 +133,25 @@ class TokenDataLoader:
         self.seq_len = seq_len
         self.device = device
         self.split = split
+        self.cur_pos = 0
         self.shard_tokens = None # Initialize the current shard tokens
         self.shard_iterator = self._get_shard_iterator() # Create an iterator for the shard files
-        self._load_next_shard() # Load the first shard of token IDs to start
+
+    def get_batch(self) -> tuple:
+        """Retrieves a batch of tokenized data from the current shard, loading new shards as needed."""
+        B, T = self.batch_size, self.seq_len
+        if self.shard_tokens is None or self.cur_pos + B * T + 1 > len(self.shard_tokens):
+            self._load_next_shard() # Skip to the next shard if the current shard does not have enough tokens for the batch
+
+        chunk_end = self.cur_pos + B * T + 1
+        chunk = self.shard_tokens[self.cur_pos:chunk_end] # Get the chunk of token IDs for the batch
+        x = torch.tensor(chunk[:-1], dtype=torch.long).view(B, T).to(self.device) # Input tokens without the last token
+        y = torch.tensor(chunk[1:], dtype=torch.long).view(B, T).to(self.device) # Target tokens without the first token
+        self.cur_pos += B * T 
+        return x, y
 
     def _get_shard_iterator(self) -> iter:
+        """Creates an iterator over the shard files in the specified directory, filtering by split if necessary."""
         shard_files = sorted(Path(self.shards_dir).glob("shard_*.npy")) # sort list of shard files
         if self.split == "val": # If validation data, only use the first shard for validation
             shard_files = shard_files[:1]
@@ -134,34 +164,11 @@ class TokenDataLoader:
             yield np.load(shard_file) # Yield each shard as a numpy array of token IDs
 
     def _load_next_shard(self) -> None:
+        """Loads the next shard of token IDs into memory and resets the current position."""
         try:
             self.shard_tokens = next(self.shard_iterator) # Load the next shard of token IDs
             self.cur_pos = 0 # Reset the current position in the shard
-        except StopIteration:
-            raise RuntimeError("No more shards available to load.")
-
-    def get_batch(self) -> tuple:
-        B, T = self.batch_size, self.seq_len
-        if self.cur_pos + B * T + 1 > len(self.shard_tokens):
-            self._load_next_shard() # Skip to the next shard if the current shard does not have enough tokens for the batch
-
-        chunk_size = self.cur_pos + B * T + 1 # Update chunk size because cur_pos was reset
-        chunk = self.shard_tokens[self.cur_pos:chunk_size] # Get the chunk of token IDs for the batch
-        x = torch.tensor(chunk[:-1], dtype=torch.long).view(B, T).to(self.device) # Input tokens without the last token
-        y = torch.tensor(chunk[1:], dtype=torch.long).view(B, T).to(self.device) # Target tokens without the first token
-        self.cur_pos += B * T 
-        return x, y
-
-if __name__ == "__main__":
-    shard_size = 100_000_000
-    num_tokens = 2_500_000_000
-    tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "tokenizer_state.json"
-    dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
-    metadata_path = "./metadata.json"
-    output_dir = "./shards"
-
-    tokenizer = FastBPETokenizer.load(tokenizer_state_path)
-    processor = DatasetProcessor(dataset_id, metadata_path, output_dir, tokenizer, shard_size, num_tokens)
-    processor.process()
-
-    
+        except StopIteration: # If there are no more shard, restart iterator for next epoch
+            self.shard_iterator = self._get_shard_iterator()
+            self.shard_tokens = next(self.shard_iterator)
+            self.cur_pos = 0
