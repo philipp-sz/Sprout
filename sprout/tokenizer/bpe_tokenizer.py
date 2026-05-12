@@ -43,17 +43,35 @@ class BPETokenizer:
     def encode(self, text: str) -> list[int]:
         """Encode the input text into a sequence of token IDs."""
         text_chunks = self._pre_process(text)
-
         token_ids = []
         for chunk in text_chunks:
-            if chunk in self.special_tokens: # If the chunk is a special token, add its ID directly
+            if chunk in self.special_tokens:
                 token_ids.append(self.special_tokens[chunk])
-            else: # Otherwise, encode the chunk into bytes and apply merges to get the final token IDs
-                byte_chunk = list(chunk.encode('utf-8')) 
-                for new_id, pair in self.merges.items():
-                    byte_chunk = self._merge_pair([byte_chunk], pair, new_id)[0] # Merge the chunk according to the learned merges
-                token_ids.extend(byte_chunk) # Add the final token IDs for the chunk
+                continue
+
+            byte_chunk = list(chunk.encode('utf-8'))
+            while len(byte_chunk) >= 2:
+                pairs = set((byte_chunk[i], byte_chunk[i + 1]) for i in range(len(byte_chunk) - 1)) # all unique pairs in the chunk
+                best_pair = min(pairs, key=lambda p: self.merges.get(p, float("inf"))) # Find the pair with the lowest new token ID (added earliest)
+                if best_pair not in self.merges: # If no pairs are mergeable, stop
+                    break
+
+                byte_chunk = self._merge_ids(byte_chunk, best_pair, self.merges[best_pair]) # Merge the best pair in the byte chunk
+            token_ids.extend(byte_chunk)
         return token_ids
+    
+    def _merge_ids(self, byte_chunk: list[int], new_pair: tuple[int, int], new_id: int) -> list[int]:
+        """Helper to replace occurrences of a pair with a new ID."""
+        new_ids = []
+        i = 0
+        while i < len(byte_chunk):
+            if i < len(byte_chunk) - 1 and (byte_chunk[i], byte_chunk[i + 1]) == new_pair:
+                new_ids.append(new_id) # Append the new token ID for the merged pair
+                i += 2
+            else:
+                new_ids.append(byte_chunk[i]) # Append the original token ID if no merge occurs
+                i += 1
+        return new_ids
 
     def decode(self, token_ids: list[int]) -> str:
         """Decode a sequence of token IDs back into text."""
@@ -65,7 +83,7 @@ class BPETokenizer:
         hex_vocab = {id: byte_value.hex() for id, byte_value in self.vocab.items()}
         state = {
             "vocab": hex_vocab,
-            "merges": self.merges,
+            "merges": {" ".join((str(x) for x in k)): v for k, v in self.merges.items()}, # convert tuple keys to space-separated strings
             "special_tokens": self.special_tokens,
             "vocab_size": self.vocab_size
         }
@@ -80,7 +98,7 @@ class BPETokenizer:
 
         instance = cls.__new__(cls) # Create an uninitialized instance of the class
         instance.vocab = {int(id): bytes.fromhex(hex_value) for id, hex_value in state["vocab"].items()}
-        instance.merges = {int(new_id): tuple(pair) for new_id, pair in state["merges"].items()} # Ensure correct types
+        instance.merges = {tuple(int(x) for x in pair.split()): int(new_id) for pair, new_id in state["merges"].items()} # convert strings back to tuple keys
         instance.special_tokens = state["special_tokens"]
         instance.vocab_size = state["vocab_size"]
         instance._NUM_BYTES = 256
