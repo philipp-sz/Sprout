@@ -4,8 +4,8 @@ from pathlib import Path
 from sprout.data.data_processing import DatasetProcessor
 
 
-shard_size = 10_000_000 # 100_000_000
-num_tokens = 100_000_000 # 2_500_000_000
+shard_size = 100_000_000
+num_tokens = 2_500_000_000
 tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
 dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
 metadata_path = "./metadata.json"
@@ -17,7 +17,7 @@ processor = DatasetProcessor(
     output_dir=output_dir,
     tokenizer_state_path=tokenizer_state_path,
     num_workers=8,
-    batch_size=100, # Number of documents to process with each imap call
+    imap_chunksize=100, # Number of documents to process with each imap call
     shard_size=shard_size,
     num_tokens=num_tokens
 )
