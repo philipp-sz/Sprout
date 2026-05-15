@@ -94,6 +94,10 @@ class TransformerDecoder(nn.Module):
             x = layer(x)
         x = self.norm(x)
         return self.lm_head(x)
+
+    def num_parameters(self) -> int:
+        """Returns the total number of trainable parameters in the model."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -104,4 +108,4 @@ class TransformerDecoder(nn.Module):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
         
         if hasattr(module, "is_residual") and module.is_residual:
-            nn.init.normal_(module.weight, mean=0.0, std=0.02 / (2 * self.num_layers)**0.5) 
+            nn.init.normal_(module.weight, mean=0.0, std=0.02 / (2 * self.num_layers)**0.5)
