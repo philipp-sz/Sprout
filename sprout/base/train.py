@@ -18,7 +18,7 @@ class Config:
     num_heads: int = 12
     num_layers: int = 12
     max_seq_len: int = 512
-    vocab_size: int = 32769 #!
+    vocab_size: int = 32768
     dropout: float = 0.0
     # Optimizer hyperparameters
     weight_decay: float = 0.1
@@ -151,7 +151,7 @@ if __name__ == "__main__":
         micro_batch_size=24,
         grad_accum_steps=42,
         eval_interval=20,
-        checkpoint_interval=100,
+        checkpoint_interval=40,
     )
     model = TransformerDecoder(
         num_layers=config.num_layers,

@@ -1,7 +1,7 @@
 from sprout.tokenizer import FastBPETokenizer
 
 
-vocab_size = 32_768
+vocab_size = 32_767 # Leave one free for the eot token
 training_data_path = "./training_data.txt"
 save_path = "./bpe_tokenizer_state.json"
 
