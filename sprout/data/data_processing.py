@@ -149,9 +149,10 @@ class TokenDataLoader:
         self.seq_len = seq_len
         self.device = device
         self.split = split
+        self.shard_idx = -1 # No shard loaded yet
         self.cur_pos = 0
         self.shard_tokens = None # Initialize the current shard tokens
-        self.shard_iterator = self._get_shard_iterator() # Create an iterator for the shard files
+        self.shard_files = self._get_shard_files()
 
     def get_batch(self) -> tuple:
         """Retrieves a batch of tokenized data from the current shard, loading new shards as needed."""
@@ -166,25 +167,34 @@ class TokenDataLoader:
         self.cur_pos += B * T 
         return x, y
 
-    def _get_shard_iterator(self) -> iter:
-        """Creates an iterator over the shard files in the specified directory, filtering by split if necessary."""
-        shard_files = sorted(Path(self.shards_dir).glob("shard_*.npy")) # sort list of shard files
-        if self.split == "val": # If validation data, only use the first shard for validation
+    def _get_shard_files(self) -> list:
+        """Retrieves and sorts the list of shard files for the specified split."""
+        shard_files = sorted(Path(self.shards_dir).glob("shard_*.npy"))
+        if self.split == "val":
             shard_files = shard_files[:1]
-        elif self.split == "train": 
+        elif self.split == "train":
             shard_files = shard_files[1:]
-
         if not shard_files:
-            raise FileNotFoundError("No shard files found in the specified directory.")
-        for shard_file in shard_files:
-            yield np.load(shard_file) # Yield each shard as a numpy array of token IDs
+            raise ValueError(f"No shard files found in {self.shards_dir} for split '{self.split}'")
+        return shard_files
 
     def _load_next_shard(self) -> None:
         """Loads the next shard of token IDs into memory and resets the current position."""
-        try:
-            self.shard_tokens = next(self.shard_iterator) # Load the next shard of token IDs
-            self.cur_pos = 0 # Reset the current position in the shard
-        except StopIteration: # If there are no more shard, restart iterator for next epoch
-            self.shard_iterator = self._get_shard_iterator()
-            self.shard_tokens = next(self.shard_iterator)
-            self.cur_pos = 0
+        self.shard_idx = (self.shard_idx + 1) % len(self.shard_files) # Increment index and wrap around if end of shard list is reached
+        self.shard_tokens = np.load(self.shard_files[self.shard_idx])
+        self.cur_pos = 0
+
+    @property
+    def get_state(self) -> dict:
+        """Returns the current state of the data loader, including shard index and position."""
+        return {
+            "shard_idx": self.shard_idx,
+            "cur_pos": self.cur_pos
+        }
+
+    @get_state.setter
+    def set_state(self, state: dict) -> None:
+        """Sets the state of the data loader to the specified shard index and position."""
+        self.shard_idx = state["shard_idx"]
+        self.cur_pos = state["cur_pos"]
+        self.shard_tokens = np.load(self.shard_files[self.shard_idx])

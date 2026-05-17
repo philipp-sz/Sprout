@@ -29,6 +29,5 @@ shards/
 metadata.json
 training_data.txt
 *.json
-
-# Checkpoints
 checkpoints/
+logs/
