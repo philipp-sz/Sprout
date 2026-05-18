@@ -37,7 +37,7 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
         probabilities = torch.softmax(new_token_logits, dim=-1)
         next_token = torch.multinomial(probabilities, num_samples=1)
 
-        if next_token.item() == tokenizer.eot_token_id:
+        if next_token.item() == tokenizer.eot_token:
             break
         token_ids = torch.cat((token_ids, next_token), dim=-1)
 
@@ -47,13 +47,11 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
 if __name__ == "__main__":
     checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "base" / "model_final.pt"
     tokenizer_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
-    config = Config(
-        micro_batch_size=24,
-        grad_accum_steps=42,
-        eval_interval=250,
-        checkpoint_interval=500,
-    )
+    config = Config(**checkpoint["config"])
+    config.convert_paths()
+
     model = TransformerDecoder(
         num_layers=config.num_layers,
         d_model=config.d_model,
@@ -63,7 +61,6 @@ if __name__ == "__main__":
         dropout=config.dropout
     ).to(config.device)
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model = model.to(torch.bfloat16)
     model = torch.compile(model)
     model.load_state_dict(checkpoint["model"])
@@ -71,11 +68,17 @@ if __name__ == "__main__":
         model=model,
         tokenizer=FastBPETokenizer.load(tokenizer_path),
         config=config,
-        prompt="Today it is normal to",
-        max_new_tokens=100,
-        temperature=0.8,
+        prompt="""The powerhouse of the cell is the:
+                    A. Nucleus
+                    B. Mitochondria
+                    C. Ribosome
+                    D. Golgi apparatus
+
+                  Answer: """,
+        max_new_tokens=1,
+        temperature=0.2,
         top_k=None,
-        top_p=0.95,
+        top_p=0.9,
         device=config.device
     )
     print(generated_text)
