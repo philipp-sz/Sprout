@@ -1,65 +1,12 @@
 import json
-import math
+import os
 from pathlib import Path
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 
 from tqdm import trange
 import torch
-from torch.optim import AdamW
 import torch.nn.functional as F
 
-from sprout.base.model import TransformerDecoder
-
-
-@dataclass
-class Config:
-    # Model hyperparameters
-    d_model: int = 768
-    num_heads: int = 12
-    num_layers: int = 12
-    max_seq_len: int = 512
-    vocab_size: int = 32768
-    dropout: float = 0.0
-    # Optimizer hyperparameters
-    weight_decay: float = 0.1
-    max_learning_rate: float = 3e-4
-    betas: tuple = (0.9, 0.95)
-    eps: float = 1e-8
-    # Training hyperparameters
-    num_training_tokens: int = 2_500_000_000
-    micro_batch_size: int = 64
-    grad_accum_steps: int = 16
-    grad_clip: float = 1.0
-    batches_in_val: int = 100
-    eval_interval: int = 500
-    checkpoint_interval: int = 1000
-    # Device configuration
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
-    # Directories
-    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "base"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards"
-    log_path: Path = Path(__file__).parent.parent / "logs" / "training_log.json"
-
-    def __post_init__(self):
-        self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len
-        self.max_iterations = self.num_training_tokens // self.effective_batch_size
-        self.warmup_steps = max(1, int(self.max_iterations*0.02))
-        self.min_learning_rate = self.max_learning_rate * 0.1
-
-    def to_dict(self) -> dict:
-        """Converts the Config dataclass to a dictionary and converts all Path objects to strings."""
-        config_dict = asdict(self)
-        config_dict["save_dir"] = str(self.save_dir)
-        config_dict["shards_dir"] = str(self.shards_dir)
-        config_dict["log_path"] = str(self.log_path)
-        return config_dict
-
-    def convert_paths(self):
-        """Converts string paths back to Path objects after loading from a checkpoint."""
-        self.save_dir = Path(self.save_dir)
-        self.shards_dir = Path(self.shards_dir)
-        self.log_path = Path(self.log_path)
 
 class TrainingLogger:
     def __init__(self, log_path: Path):
@@ -68,6 +15,13 @@ class TrainingLogger:
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def log(self, step: int, train_loss: float, eval_loss: float, lr: float, grad_norm: float):
+        if not self.records and os.path.exists(self.log_path):
+            with open(self.log_path, "r") as f:
+                loaded_records = json.load(f)
+
+            # Remove records that are at or after the current step to avoid duplicates when resuming from a checkpoint
+            self.records = [record for record in loaded_records if record["step"] < step]
+
         self.records.append({
             "step": step,
             "train_loss": train_loss,
@@ -88,11 +42,11 @@ class Trainer:
         optimizer: The optimizer to use for training.
         config: Configuration object containing hyperparameters and settings.
     """
-    def __init__(self, model, train_loader, val_loader, optimizer, config):
+    def __init__(self, model, train_loader, val_loader, config, optimizer=None):
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.optimizer = optimizer
+        self.optimizer = optimizer if optimizer is not None else model.configure_optimizers(config)
         self.config = config
         self.start_step = 1
         self.logger = TrainingLogger(config.log_path)
@@ -116,7 +70,7 @@ class Trainer:
                 train_loss += loss.item() # Keep scaled down so it reflects the average loss per micro batch
 
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
-            lr = self._get_lr(step)
+            lr = self.config.get_lr(step)
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = lr
             self.optimizer.step()
@@ -161,49 +115,24 @@ class Trainer:
         torch.save(state_dict, checkpoint_path)
 
     @classmethod
-    def from_checkpoint(cls, checkpoint_path: Path, train_loader, val_loader):
+    def from_checkpoint(cls, checkpoint_path: Path, model_class, config_class, train_loader, val_loader):
         """Creates a Trainer instance from a saved checkpoint, restoring model state, optimizer state, and training progress."""
         checkpoint = torch.load(checkpoint_path)
-        config = Config(**checkpoint["config"])
+        config = config_class(**checkpoint["config"])
         config.convert_paths() # Convert string paths back to Path objects
-        model = TransformerDecoder(
-            num_layers=config.num_layers,
-            d_model=config.d_model,
-            num_heads=config.num_heads,
-            max_seq_len=config.max_seq_len,
-            vocab_size=config.vocab_size,
-            dropout=config.dropout,
-        ).to(config.device)
+        model = model_class(config).to(config.device)
         model = torch.compile(model)
         model.load_state_dict(checkpoint["model"])
 
-        optimizer = AdamW(
-            model.parameters(),
-            lr=config.max_learning_rate,
-            weight_decay=config.weight_decay,
-            betas=config.betas,
-            eps=config.eps,
-            fused=True
-        )
+        optimizer = model.configure_optimizers(config)
         optimizer.load_state_dict(checkpoint["optimizer"])
 
         train_loader.set_state = checkpoint["train_loader_state"]
         val_loader.set_state = checkpoint["val_loader_state"]
-        trainer = cls(model, train_loader, val_loader, optimizer, config)
+        trainer = cls(model, train_loader, val_loader, config, optimizer)
         trainer.start_step = checkpoint["step_num"] + 1
         print(f"Resumed training from checkpoint at step {checkpoint['step_num']}.")
         return trainer
-
-    def _get_lr(self, step: int) -> float:
-        """Computes the learning rate for the current step based on a cosine decay schedule with linear warmup."""
-        if step < self.config.warmup_steps: # Initial warmup
-            return self.config.max_learning_rate * (step + 1) / self.config.warmup_steps
-        if step >= self.config.max_iterations: # After decay, clamp at min
-            return self.config.min_learning_rate
-
-        progress = (step - self.config.warmup_steps) / (self.config.max_iterations - self.config.warmup_steps)
-        coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return self.config.min_learning_rate + coeff * (self.config.max_learning_rate - self.config.min_learning_rate)
 
     def _print_summary(self):
         """Prints a startup summary of the training and model configuration."""

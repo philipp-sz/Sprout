@@ -4,6 +4,9 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.optim import AdamW
+
+from sprout.base.config import Config
 
 
 class MultiHeadAttention(nn.Module):
@@ -72,16 +75,17 @@ class TransformerBlock(nn.Module):
 
 class TransformerDecoder(nn.Module):
     """Transformer Decoder consisting of multiple Transformer blocks."""
-    def __init__(self, num_layers: int, d_model: int, num_heads: int, max_seq_len: int, vocab_size: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.num_layers = num_layers
-        self.token_embed = nn.Embedding(vocab_size, d_model)
-        self.positional_embed = nn.Embedding(max_seq_len, d_model)
-        self.register_buffer("positional_ids", torch.arange(max_seq_len).unsqueeze(0).expand(1, max_seq_len))
-        self.layers = nn.ModuleList([TransformerBlock(d_model, num_heads, max_seq_len, dropout) for _ in range(num_layers)])
-        self.norm = nn.LayerNorm(d_model)
-        self.lm_head = nn.Linear(d_model, vocab_size, bias=False) # No bias because token_embed has no bias
+        self.num_layers = config.num_layers
+        self.token_embed = nn.Embedding(config.vocab_size, config.d_model)
+        self.positional_embed = nn.Embedding(config.max_seq_len, config.d_model)
+        self.register_buffer("positional_ids", torch.arange(config.max_seq_len).unsqueeze(0).expand(1, config.max_seq_len))
+        self.layers = nn.ModuleList([TransformerBlock(config.d_model, config.num_heads, config.max_seq_len, config.dropout) for _ in range(config.num_layers)])
+        self.norm = nn.LayerNorm(config.d_model)
+        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False) # No bias because token_embed has no bias
         self.lm_head.weight = self.token_embed.weight # Weight tying
+        self.config = config
         self.apply(self._init_weights)
         
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -98,6 +102,17 @@ class TransformerDecoder(nn.Module):
     def num_parameters(self) -> int:
         """Returns the total number of trainable parameters in the model."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def configure_optimizers(self, config: Config):
+        """Configures the AdamW optimizer with the specified hyperparameters from the config."""
+        return AdamW(
+            self.parameters(),
+            lr=config.max_learning_rate,
+            weight_decay=config.weight_decay,
+            betas=config.betas,
+            eps=config.eps,
+            fused=True
+        )
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):

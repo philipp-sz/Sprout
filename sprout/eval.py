@@ -1,18 +1,11 @@
-from pathlib import Path 
-
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
-from torchgen import context
-
-from sprout.tokenizer import FastBPETokenizer
-from sprout.base.model import TransformerDecoder
-from sprout.base.train import Config
 
 
 class Evaluator:
     """Evaluates a model on different metrics and benchmarks."""
-    def __init__(self, model, tokenizer: FastBPETokenizer, config: Config):
+    def __init__(self, model, tokenizer, config):
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
@@ -136,35 +129,3 @@ class Evaluator:
         print(f"{'MMLU Accuracy':<30}: {mmlu_acc:.2%}")
         print(f"{'LAMBADA Accuracy':<30}: {lambada_acc:.2%}")
         print(border)
-
-if __name__ == "__main__":
-    checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "base" / "model_final.pt"
-    tokenizer_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-    config = Config(**checkpoint["config"])
-    config.convert_paths()
-
-    model = TransformerDecoder(
-        num_layers=config.num_layers,
-        d_model=config.d_model,
-        num_heads=config.num_heads,
-        max_seq_len=config.max_seq_len,
-        vocab_size=config.vocab_size,
-        dropout=config.dropout
-    ).to(config.device)
-    model = model.to(torch.bfloat16)
-    model = torch.compile(model)
-    model.load_state_dict(checkpoint["model"])
-
-    tokenizer = FastBPETokenizer.load(tokenizer_path)
-    evaluator = Evaluator(model, tokenizer, config)
-
-    context, endings, labels = evaluator.load_hellaswag()
-    hellaswag_acc = evaluator.evaluate_knowledge_benchmark(context, endings, labels)
-    context, endings, labels = evaluator.load_mmlu()
-    mmlu_acc = evaluator.evaluate_knowledge_benchmark(context, endings, labels)
-    lambada_texts = evaluator.load_lambada()
-    lambada_acc = evaluator.evaluate_completion_benchmark(lambada_texts)
-    perplexity = evaluator.calc_perplexity("The cat sat on the mat.")
-    evaluator.print_evaluation_results(perplexity, hellaswag_acc, mmlu_acc, lambada_acc)
