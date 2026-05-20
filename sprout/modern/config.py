@@ -15,6 +15,7 @@ class Config:
     max_seq_len: int = 512
     vocab_size: int = 32768
     dropout: float = 0.0
+    rope_base_freq: float = 100_000.0
     # Optimizer hyperparameters
     weight_decay: float = 0.1
     max_learning_rate: float = 3e-4

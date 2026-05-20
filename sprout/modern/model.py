@@ -9,6 +9,54 @@ from torch.optim import AdamW
 from sprout.modern.config import Config
 
 
+class RotaryEmbedding(nn.Module):
+    """Rotary Positional Embedding (RoPE) module."""
+    def __init__(self, head_dim: int, max_seq_len: int, base_freq: float = 10_000.0) -> None:
+        super().__init__()
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+        self.base_freq = base_freq
+
+        inv_freq = 1.0 / (base_freq ** (torch.arange(0, head_dim, 2).float() / head_dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.sin_cached = None
+        self.cos_cached = None
+        self._set_cos_sin_cache(max_seq_len) # Precompute cos and sin values for the maximum sequence length
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """Applies rotary positional embeddings to the input tensor."""
+        if seq_len > self.max_seq_len: # Recompute cache if sequence length exceeds current max
+            self.max_seq_len = seq_len
+            self._set_cos_sin_cache(seq_len)
+
+        return self._apply_rotary_pos_emb(q, k, seq_len)
+
+    def _set_cos_sin_cache(self, seq_len: int) -> None:
+        """Precomputes and caches the cosine and sine values for the given sequence length."""
+        t = torch.arange(seq_len, device=self.inv_freq.device).float()
+        freqs = torch.outer(t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1) # Duplicate frequencies to work with head_dim
+
+        # Add singletons for broadcasting during attention computation
+        self.cos_cached = emb.cos().unsqueeze(0).unsqueeze(2) # Shape (1, seq_len, 1, head_dim)
+        self.sin_cached = emb.sin().unsqueeze(0).unsqueeze(2) # Shape (1, seq_len, 1, head_dim)
+
+    def _apply_rotary_pos_emb(self, q: torch.Tensor, k: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """Applies the precomputed rotary positional embeddings to the query and key tensors."""
+        # Slice the cached cos and sin values to match the current sequence length
+        cos = self.cos_cached[:, :seq_len, :, :].to(device=q.device, dtype=q.dtype)
+        sin = self.sin_cached[:, :seq_len, :, :].to(device=q.device, dtype=q.dtype)
+
+        q_rotated = (q * cos) + (self._rotate_half(q) * sin)
+        k_rotated = (k * cos) + (self._rotate_half(k) * sin)
+
+        return q_rotated, k_rotated
+
+    def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:
+        """Rotates half the hidden dims of the input to efficiently compute the rotation."""
+        x1, x2 = x.chunk(2, dim=-1)
+        return torch.cat((-x2, x1), dim=-1)
+
 class MultiHeadAttention(nn.Module):
     """Causal Multi-Head Self-Attention module with Flash Attention support."""
     def __init__(self, d_model: int, num_heads: int, num_kv_heads: int, max_seq_len: int, dropout: float = 0.0) -> None:
@@ -18,24 +66,41 @@ class MultiHeadAttention(nn.Module):
         self.num_kv_heads = num_kv_heads
         self.head_size = d_model // num_heads
         self.dropout = dropout
+
+        self.rope = RotaryEmbedding(self.head_size, max_seq_len, base_freq=Config.rope_base_freq)
         self.q_attn = nn.Linear(d_model, num_heads * self.head_size)
         self.k_attn = nn.Linear(d_model, num_kv_heads * self.head_size)
         self.v_attn = nn.Linear(d_model, num_kv_heads * self.head_size)
         self.out_proj = nn.Linear(d_model, d_model)
+        self.q_norm = nn.RMSNorm(self.head_size, dtype=torch.bfloat16)
+        self.k_norm = nn.RMSNorm(self.head_size, dtype=torch.bfloat16)
         self.out_proj.is_residual = True # Mark as residual for down scaling in weight initialization
         self.attn_dropout = nn.Dropout(dropout)
         self.register_buffer("mask", torch.ones(max_seq_len, max_seq_len).tril().bool()) # Causal mask for attention
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
-        q = self.q_attn(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
-        k = self.k_attn(x).view(B, T, self.num_kv_heads, self.head_size).transpose(1, 2)
-        v = self.v_attn(x).view(B, T, self.num_kv_heads, self.head_size).transpose(1, 2)
+        q = self.q_attn(x).view(B, T, self.num_heads, self.head_size)
+        k = self.k_attn(x).view(B, T, self.num_kv_heads, self.head_size)
+        v = self.v_attn(x).view(B, T, self.num_kv_heads, self.head_size)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        q, k = self.rope(q, k, seq_len=T) 
+        q = q.transpose(1, 2) 
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
         try:
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 attn_output = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True, dropout_p=self.dropout if self.training else 0.0)
         except RuntimeError: # Fallback to manual attention if Flash Attention is not available
             warnings.warn("Flash Attention not available, falling back to manual attention implementation.")
+            # Repeat keys and values to match queries for GQA
+            groups = self.num_heads // self.num_kv_heads
+            k = k.repeat_interleave(groups, dim=1)
+            v = v.repeat_interleave(groups, dim=1)
+
             scale_factor = (C // self.num_heads) ** -0.5
             attn_scores = torch.matmul(q, k.transpose(-2, -1)) * scale_factor
             attn_scores = attn_scores.masked_fill(~self.mask[:T, :T], float("-inf")) # Slice mask to match sequence length and fill with -inf
@@ -46,18 +111,17 @@ class MultiHeadAttention(nn.Module):
         return self.out_proj(attn_output)
 
 class FeedForward(nn.Module):
-    """Simple Feed-Forward Network with GELU activation."""
+    """Simple Feed-Forward Network with ReLU^2 activation."""
     def __init__(self, d_model: int, dropout: float = 0.0) -> None:
         super().__init__()
         self.linear1 = nn.Linear(d_model, 4*d_model)
-        self.gelu = nn.GELU()
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(4*d_model, d_model)
         self.linear2.is_residual = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.linear1(x)
-        x = self.gelu(x)
+        x = F.relu(x).square()
         x = self.dropout(x)
         return self.linear2(x)
 
@@ -67,8 +131,8 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attn = MultiHeadAttention(d_model, num_heads, num_kv_heads, max_seq_len, dropout)
         self.ffn = FeedForward(d_model, dropout)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        self.norm1 = nn.RMSNorm(d_model)
+        self.norm2 = nn.RMSNorm(d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x))
@@ -81,21 +145,16 @@ class TransformerDecoder(nn.Module):
         super().__init__()
         self.num_layers = config.num_layers
         self.token_embed = nn.Embedding(config.vocab_size, config.d_model)
-        self.positional_embed = nn.Embedding(config.max_seq_len, config.d_model)
-        self.register_buffer("positional_ids", torch.arange(config.max_seq_len).unsqueeze(0).expand(1, config.max_seq_len))
         self.layers = nn.ModuleList([TransformerBlock(config.d_model, config.num_heads, config.num_kv_heads, config.max_seq_len, config.dropout) for _ in range(config.num_layers)])
-        self.norm = nn.LayerNorm(config.d_model)
+        self.norm = nn.RMSNorm(config.d_model)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False) # No bias because token_embed has no bias
         self.lm_head.weight = self.token_embed.weight # Weight tying
         self.config = config
         self.apply(self._init_weights)
         
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        B, T = input_ids.size()
-        token_embeddings = self.token_embed(input_ids)
-        positional_ids = self.positional_ids[:, :T]
-        positional_embeddings = self.positional_embed(positional_ids)
-        x = token_embeddings + positional_embeddings
+        x = self.token_embed(input_ids)
+
         for layer in self.layers:
             x = layer(x)
         x = self.norm(x)
