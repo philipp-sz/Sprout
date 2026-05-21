@@ -42,11 +42,11 @@ class Trainer:
         optimizer: The optimizer to use for training.
         config: Configuration object containing hyperparameters and settings.
     """
-    def __init__(self, model, train_loader, val_loader, config, optimizer=None):
+    def __init__(self, model, train_loader, val_loader, config, optimizers: tuple | None = None):
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.optimizer = optimizer if optimizer is not None else model.configure_optimizers(config)
+        self.adamw_optim, self.muon_optim = optimizers if optimizers is not None else model.configure_optimizers(config)
         self.config = config
         self.start_step = 1
         self.logger = TrainingLogger(config.log_path)
@@ -58,7 +58,8 @@ class Trainer:
         for step in trange(self.start_step, self.config.max_iterations + 1, desc="Training..."):
             train_loss = 0.0
             self.model.train()
-            self.optimizer.zero_grad(set_to_none=True)
+            self.adamw_optim.zero_grad(set_to_none=True)
+            self.muon_optim.zero_grad(set_to_none=True)
 
             for _ in range(self.config.grad_accum_steps):
                 x, y = self.train_loader.get_batch()
@@ -69,15 +70,17 @@ class Trainer:
                 loss.backward()
                 train_loss += loss.item() # Keep scaled down so it reflects the average loss per micro batch
 
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
             lr = self.config.get_lr(step)
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = lr
-            self.optimizer.step()
+            for opt in [self.muon_optim, self.adamw_optim]:
+                for param_group in opt.param_groups:
+                    param_group["lr"] = lr
+
+            self.adamw_optim.step()
+            self.muon_optim.step()
 
             if step % self.config.eval_interval == 0:
                 eval_loss = self.evaluate()
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
                 self.logger.log(step, train_loss, eval_loss, lr, grad_norm.item())
                 print(f"Step {step}: Train Loss = {train_loss:.4f}, Eval Loss = {eval_loss:.4f}")
 
@@ -102,7 +105,8 @@ class Trainer:
         """Saves the model checkpoint to disk, including model state, optimizer state, config, and training statistics."""
         state_dict = {
             "model": self.model.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
+            "adamw_optimizer": self.adamw_optim.state_dict(),
+            "muon_optimizer": self.muon_optim.state_dict(),
             "config": self.config.to_dict(),
             "train_loader_state": self.train_loader.get_state,
             "val_loader_state": self.val_loader.get_state,
@@ -124,12 +128,13 @@ class Trainer:
         model = torch.compile(model)
         model.load_state_dict(checkpoint["model"])
 
-        optimizer = model.configure_optimizers(config)
-        optimizer.load_state_dict(checkpoint["optimizer"])
+        adamw_optim, muon_optim = model.configure_optimizers(config)
+        adamw_optim.load_state_dict(checkpoint["adamw_optimizer"])
+        muon_optim.load_state_dict(checkpoint["muon_optimizer"])
 
         train_loader.set_state = checkpoint["train_loader_state"]
         val_loader.set_state = checkpoint["val_loader_state"]
-        trainer = cls(model, train_loader, val_loader, config, optimizer)
+        trainer = cls(model, train_loader, val_loader, config, (adamw_optim, muon_optim))
         trainer.start_step = checkpoint["step_num"] + 1
         print(f"Resumed training from checkpoint at step {checkpoint['step_num']}.")
         return trainer
@@ -150,5 +155,5 @@ class Trainer:
     def _save_final(self):
         torch.save({
             "model": self.model.state_dict(),
-            "config": asdict(self.config),
+            "config": self.config.to_dict(),
         }, self.config.save_dir / "model_final.pt")

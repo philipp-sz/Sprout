@@ -14,11 +14,13 @@ class Config:
     num_layers: int = 12
     max_seq_len: int = 512
     vocab_size: int = 32768
+    mlp_expansion: int = 6
     dropout: float = 0.0
     rope_base_freq: float = 100_000.0
     # Optimizer hyperparameters
+    muon_momentum: float = 0.95
     weight_decay: float = 0.1
-    max_learning_rate: float = 3e-4
+    max_learning_rate: float = 1e-4
     betas: tuple = (0.9, 0.95)
     eps: float = 1e-8
     # Training hyperparameters
@@ -41,6 +43,7 @@ class Config:
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len
         self.max_iterations = self.num_training_tokens // self.effective_batch_size
         self.warmup_steps = max(1, int(self.max_iterations*0.02))
+        self.decay_steps = self.max_iterations - max(1, int(self.max_iterations*0.18))
         self.min_learning_rate = self.max_learning_rate * 0.1
 
     def to_dict(self) -> dict:
@@ -61,9 +64,8 @@ class Config:
         """Computes the learning rate for the current step based on a cosine decay schedule with linear warmup."""
         if step < self.warmup_steps: # Initial warmup
             return self.max_learning_rate * (step + 1) / self.warmup_steps
-        if step >= self.max_iterations: # After decay, clamp at min
-            return self.min_learning_rate
-
-        progress = (step - self.warmup_steps) / (self.max_iterations - self.warmup_steps)
-        coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return self.min_learning_rate + coeff * (self.max_learning_rate - self.min_learning_rate)
+        if step >= self.decay_steps: # After decay, clamp at min
+            progress = (step - self.decay_steps) / (self.max_iterations - self.decay_steps)
+            coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return self.min_learning_rate + coeff * (self.max_learning_rate - self.min_learning_rate)
+        return self.max_learning_rate

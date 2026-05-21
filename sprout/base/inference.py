@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 
-from sprout.base.train import Config, Trainer
+from sprout.base.config import Config
 from sprout.base.model import TransformerDecoder
 from sprout.tokenizer import FastBPETokenizer
 

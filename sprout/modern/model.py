@@ -4,24 +4,24 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from torch.optim import AdamW
+from torch.optim import AdamW, Muon
 
 from sprout.modern.config import Config
 
 
 class RotaryEmbedding(nn.Module):
     """Rotary Positional Embedding (RoPE) module."""
-    def __init__(self, head_dim: int, max_seq_len: int, base_freq: float = 10_000.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.head_dim = head_dim
-        self.max_seq_len = max_seq_len
-        self.base_freq = base_freq
+        self.head_dim = config.d_model // config.num_heads
+        self.max_seq_len = config.max_seq_len
+        self.base_freq = config.rope_base_freq
 
-        inv_freq = 1.0 / (base_freq ** (torch.arange(0, head_dim, 2).float() / head_dim))
+        inv_freq = 1.0 / (self.base_freq ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.sin_cached = None
         self.cos_cached = None
-        self._set_cos_sin_cache(max_seq_len) # Precompute cos and sin values for the maximum sequence length
+        self._set_cos_sin_cache(self.max_seq_len) # Precompute cos and sin values for the maximum sequence length
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, seq_len: int) -> torch.Tensor:
         """Applies rotary positional embeddings to the input tensor."""
@@ -59,24 +59,24 @@ class RotaryEmbedding(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     """Causal Multi-Head Self-Attention module with Flash Attention support."""
-    def __init__(self, d_model: int, num_heads: int, num_kv_heads: int, max_seq_len: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads
-        self.head_size = d_model // num_heads
-        self.dropout = dropout
+        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.num_kv_heads = config.num_kv_heads
+        self.head_size = config.d_model // config.num_heads
+        self.dropout = config.dropout
 
-        self.rope = RotaryEmbedding(self.head_size, max_seq_len, base_freq=Config.rope_base_freq)
-        self.q_attn = nn.Linear(d_model, num_heads * self.head_size)
-        self.k_attn = nn.Linear(d_model, num_kv_heads * self.head_size)
-        self.v_attn = nn.Linear(d_model, num_kv_heads * self.head_size)
-        self.out_proj = nn.Linear(d_model, d_model)
+        self.rope = RotaryEmbedding(config)
+        self.q_attn = nn.Linear(config.d_model, config.num_heads * self.head_size, bias=False)
+        self.k_attn = nn.Linear(config.d_model, config.num_kv_heads * self.head_size, bias=False)
+        self.v_attn = nn.Linear(config.d_model, config.num_kv_heads * self.head_size, bias=False)
+        self.out_proj = nn.Linear(config.d_model, config.d_model, bias=False)
         self.q_norm = nn.RMSNorm(self.head_size, dtype=torch.bfloat16)
         self.k_norm = nn.RMSNorm(self.head_size, dtype=torch.bfloat16)
         self.out_proj.is_residual = True # Mark as residual for down scaling in weight initialization
-        self.attn_dropout = nn.Dropout(dropout)
-        self.register_buffer("mask", torch.ones(max_seq_len, max_seq_len).tril().bool()) # Causal mask for attention
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.register_buffer("mask", torch.ones(config.max_seq_len, config.max_seq_len).tril().bool()) # Causal mask for attention
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
@@ -112,11 +112,11 @@ class MultiHeadAttention(nn.Module):
 
 class FeedForward(nn.Module):
     """Simple Feed-Forward Network with ReLU^2 activation."""
-    def __init__(self, d_model: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.linear1 = nn.Linear(d_model, 4*d_model)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(4*d_model, d_model)
+        self.linear1 = nn.Linear(config.d_model, int(config.mlp_expansion*config.d_model), bias=False)
+        self.dropout = nn.Dropout(config.dropout)
+        self.linear2 = nn.Linear(int(config.mlp_expansion*config.d_model), config.d_model, bias=False)
         self.linear2.is_residual = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -127,12 +127,12 @@ class FeedForward(nn.Module):
 
 class TransformerBlock(nn.Module):
     """Single Transformer block consisting of Multi-Head Attention and Feed-Forward Network."""
-    def __init__(self, d_model: int, num_heads: int, num_kv_heads: int, max_seq_len: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.attn = MultiHeadAttention(d_model, num_heads, num_kv_heads, max_seq_len, dropout)
-        self.ffn = FeedForward(d_model, dropout)
-        self.norm1 = nn.RMSNorm(d_model)
-        self.norm2 = nn.RMSNorm(d_model)
+        self.attn = MultiHeadAttention(config)
+        self.ffn = FeedForward(config)
+        self.norm1 = nn.RMSNorm(config.d_model)
+        self.norm2 = nn.RMSNorm(config.d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x))
@@ -145,7 +145,7 @@ class TransformerDecoder(nn.Module):
         super().__init__()
         self.num_layers = config.num_layers
         self.token_embed = nn.Embedding(config.vocab_size, config.d_model)
-        self.layers = nn.ModuleList([TransformerBlock(config.d_model, config.num_heads, config.num_kv_heads, config.max_seq_len, config.dropout) for _ in range(config.num_layers)])
+        self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_layers)])
         self.norm = nn.RMSNorm(config.d_model)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False) # No bias because token_embed has no bias
         self.lm_head.weight = self.token_embed.weight # Weight tying
@@ -166,15 +166,39 @@ class TransformerDecoder(nn.Module):
 
     def configure_optimizers(self, config: Config):
         """Configures the AdamW optimizer with the specified hyperparameters from the config."""
-        return AdamW(
-            self.parameters(),
+        adamw_params, muon_params = self._identify_optimizer_params()
+        opt_adam = AdamW(
+            adamw_params,
             lr=config.max_learning_rate,
             weight_decay=config.weight_decay,
             betas=config.betas,
             eps=config.eps,
             fused=True
         )
+        opt_muon = Muon(
+            muon_params,
+            lr=config.max_learning_rate,
+            weight_decay=config.weight_decay,
+            momentum=config.muon_momentum,
+            adjust_lr_fn="match_rms_adamw",
+        )
+        return opt_adam, opt_muon
     
+    def _identify_optimizer_params(self) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
+        """Identifies parameter groups for muon and adamw optimizers."""
+        muon_params = []
+        adamw_params = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            # Only apply Muon to 2D weight matrices and not to embeddings
+            if param.ndim == 2 and "token_embed" not in name and "lm_head" not in name:
+                muon_params.append(param)
+            else:
+                adamw_params.append(param)
+        return adamw_params, muon_params
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
