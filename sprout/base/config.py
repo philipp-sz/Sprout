@@ -32,7 +32,7 @@ class Config:
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
     # Directories
     save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "base"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards"
+    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "base_shards"
     log_path: Path = Path(__file__).parent.parent / "logs" / "base_training_log.json"
 
     def __post_init__(self):

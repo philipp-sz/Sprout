@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import torch
 import numpy as np
 from tqdm import tqdm
-from datasets import load_dataset
+from datasets import load_dataset, interleave_datasets
 
 from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
 
@@ -26,7 +26,7 @@ class DatasetProcessor:
     """
     Loads a dataset, tokenizes it, and saves the tokenized data in shards.
     Args:
-        dataset_id (str): The identifier of the dataset to load.
+        mixtures (list[float]): The mixture probabilities for base, and math datasets.
         metadata_path (str): The path where metadata is saved.
         output_dir (str): The directory where the tokenized data will be saved.
         tokenizer_state_path (str): The path to the tokenizer state.
@@ -35,9 +35,9 @@ class DatasetProcessor:
         shard_size (int): The number of samples per shard.
         num_tokens (int): The number of tokens to stream from the dataset.
     """
-    def __init__(self, dataset_id: str, metadata_path: str, output_dir: str, tokenizer_state_path: str,
-                num_workers: int, imap_chunksize: int, shard_size: int, num_tokens: int) -> None:
-        self.dataset_id = dataset_id
+    def __init__(self, mixture_probabilites: list[float], metadata_path: str, output_dir: str,
+                tokenizer_state_path: str,num_workers: int, imap_chunksize: int, shard_size: int, num_tokens: int) -> None:
+        self.mixture_probabilites = mixture_probabilites
         self.metadata_path = Path(metadata_path)
         self.output_dir = Path(output_dir)
         self.tokenizer_state_path = tokenizer_state_path
@@ -87,8 +87,16 @@ class DatasetProcessor:
         num_total_rows = proj_state["num_total_rows"]
         num_total_tokens = proj_state["num_total_tokens"]
 
-        ds = load_dataset(self.dataset_id, split="train", streaming=True)
-        ds = ds.skip(num_total_rows) # Skip rows that have already been processed based on metadata
+        base_ds = load_dataset("HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled", split="train", streaming=True)
+        math_ds = load_dataset("HuggingFaceTB/finemath", name="finemath-4plus", split="train", streaming=True)
+        ds = interleave_datasets(
+            datasets=[base_ds, math_ds],
+            probabilities=self.mixture_probabilites,
+            seed=42, # Reproducibility of the interleaving for consistency
+            stopping_strategy="all_exhausted"
+        )
+
+        ds = ds.skip(num_total_rows)
         ds_iter = iter(ds)
         return metadata, ds_iter, num_total_tokens
 

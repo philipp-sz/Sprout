@@ -28,6 +28,7 @@ shards/
 *.npy
 metadata.json
 training_data.txt
+training_data_mixed.txt
 *.json
 checkpoints/
 logs/

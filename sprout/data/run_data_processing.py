@@ -4,15 +4,15 @@ from pathlib import Path
 from sprout.data.data_processing import DatasetProcessor
 
 
+num_tokens = 15_000_000_000
 shard_size = 100_000_000
-num_tokens = 12_500_000_000
-tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
-dataset_id = "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled"
-metadata_path = "./metadata.json"
-output_dir = "./shards"
+tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_mixed_state.json"
+mixture_probs = [0.80, 0.20] # Base, Math
+metadata_path = "./metadata_mix.json"
+output_dir = "./shards/mixture_shards"
 
 processor = DatasetProcessor(
-    dataset_id=dataset_id,
+    mixture_probabilites=mixture_probs,
     metadata_path=metadata_path,
     output_dir=output_dir,
     tokenizer_state_path=tokenizer_state_path,
