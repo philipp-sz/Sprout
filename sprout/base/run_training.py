@@ -12,13 +12,13 @@ torch.set_float32_matmul_precision("high")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-checkpoint_path = None # Path(__file__).parent.parent / "checkpoints" / "base" / "checkpoint_step_500.pt"
+checkpoint_path = None
 
 config = Config(
     micro_batch_size=24,
     grad_accum_steps=42,
-    eval_interval=10,
-    checkpoint_interval=10,
+    eval_interval=250,
+    checkpoint_interval=500,
 )
 train_loader = TokenDataLoader(config.shards_dir, config.micro_batch_size, config.max_seq_len, config.device, split="train")
 val_loader = TokenDataLoader(config.shards_dir, config.micro_batch_size, config.max_seq_len, config.device, split="val")

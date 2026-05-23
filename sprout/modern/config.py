@@ -24,7 +24,7 @@ class Config:
     betas: tuple = (0.9, 0.95)
     eps: float = 1e-8
     # Training hyperparameters
-    num_training_tokens: int = 2_500_000_000
+    num_training_tokens: int = 15_000_000_000
     micro_batch_size: int = 64
     grad_accum_steps: int = 16
     grad_clip: float = 1.0
@@ -37,9 +37,9 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
     # Directories
-    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "modern" / "base"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "base_shards"
-    log_path: Path = Path(__file__).parent.parent / "logs" / "modern_training_log.json"
+    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "modern" / "extended"
+    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "mixture_shards"
+    log_path: Path = Path(__file__).parent.parent / "logs" / "modern_training_mixture_log.json"
 
     def __post_init__(self):
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len

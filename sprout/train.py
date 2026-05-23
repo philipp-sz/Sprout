@@ -1,7 +1,6 @@
 import json
 import os
 from pathlib import Path
-from dataclasses import asdict
 
 from tqdm import trange
 import torch
@@ -42,14 +41,20 @@ class Trainer:
         optimizer: The optimizer to use for training.
         config: Configuration object containing hyperparameters and settings.
     """
-    def __init__(self, model, train_loader, val_loader, config, optimizers: tuple | None = None):
+    def __init__(self, model, train_loader, val_loader, config, optimizers: tuple | list | None = None):
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.adamw_optim, self.muon_optim = optimizers if optimizers is not None else model.configure_optimizers(config)
         self.config = config
         self.start_step = 1
         self.logger = TrainingLogger(config.log_path)
+
+        raw_optims = optimizers if optimizers is not None else model.configure_optimizers(config)
+        if isinstance(raw_optims, (list, tuple)):
+            self.optimizers = list(raw_optims)
+        else:
+            self.optimizers = [raw_optims]
+
         assert self.config.checkpoint_interval % self.config.eval_interval == 0, "Checkpoint interval must be a multiple of evaluation interval for consistent logging."
 
     def train(self) -> None:
@@ -58,8 +63,8 @@ class Trainer:
         for step in trange(self.start_step, self.config.max_iterations + 1, desc="Training..."):
             train_loss = 0.0
             self.model.train()
-            self.adamw_optim.zero_grad(set_to_none=True)
-            self.muon_optim.zero_grad(set_to_none=True)
+            for optim in self.optimizers:
+                optim.zero_grad(set_to_none=True)
 
             for _ in range(self.config.grad_accum_steps):
                 x, y = self.train_loader.get_batch()
@@ -72,12 +77,12 @@ class Trainer:
 
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
             lr = self.config.get_lr(step)
-            for opt in [self.muon_optim, self.adamw_optim]:
+            for opt in self.optimizers:
                 for param_group in opt.param_groups:
                     param_group["lr"] = lr
 
-            self.adamw_optim.step()
-            self.muon_optim.step()
+            for optim in self.optimizers:
+                optim.step()
 
             if step % self.config.eval_interval == 0:
                 eval_loss = self.evaluate()
@@ -105,8 +110,7 @@ class Trainer:
         """Saves the model checkpoint to disk, including model state, optimizer state, config, and training statistics."""
         state_dict = {
             "model": self.model.state_dict(),
-            "adamw_optimizer": self.adamw_optim.state_dict(),
-            "muon_optimizer": self.muon_optim.state_dict(),
+            "optimizers_states": [optim.state_dict() for optim in self.optimizers],
             "config": self.config.to_dict(),
             "train_loader_state": self.train_loader.get_state,
             "val_loader_state": self.val_loader.get_state,
@@ -128,13 +132,25 @@ class Trainer:
         model = torch.compile(model)
         model.load_state_dict(checkpoint["model"])
 
-        adamw_optim, muon_optim = model.configure_optimizers(config)
-        adamw_optim.load_state_dict(checkpoint["adamw_optimizer"])
-        muon_optim.load_state_dict(checkpoint["muon_optimizer"])
+        raw_optims = model.configure_optimizers(config)
+        if isinstance(raw_optims, (list, tuple)):
+            optimizers = list(raw_optims)
+        else:
+            optimizers = [raw_optims]
+
+        # Backward compatibility for old checkpoints
+        if "optimizers_states" in checkpoint:
+            for optim, optim_state in zip(optimizers, checkpoint["optimizers_states"]):
+                optim.load_state_dict(optim_state)
+        else:
+            if "adamw_optimizer" in checkpoint and len(optimizers) >= 1:
+                optimizers[0].load_state_dict(checkpoint["adamw_optimizer"])
+            if "muon_optimizer" in checkpoint and len(optimizers) >= 2:
+                optimizers[1].load_state_dict(checkpoint["muon_optimizer"])
 
         train_loader.set_state = checkpoint["train_loader_state"]
         val_loader.set_state = checkpoint["val_loader_state"]
-        trainer = cls(model, train_loader, val_loader, config, (adamw_optim, muon_optim))
+        trainer = cls(model, train_loader, val_loader, config, optimizers)
         trainer.start_step = checkpoint["step_num"] + 1
         print(f"Resumed training from checkpoint at step {checkpoint['step_num']}.")
         return trainer

@@ -11,18 +11,18 @@ from sprout.base.config import Config
 
 class MultiHeadAttention(nn.Module):
     """Causal Multi-Head Self-Attention module with Flash Attention support."""
-    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.dropout = dropout
-        self.q_attn = nn.Linear(d_model, d_model)
-        self.k_attn = nn.Linear(d_model, d_model)
-        self.v_attn = nn.Linear(d_model, d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
+        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.dropout = config.dropout
+        self.q_attn = nn.Linear(self.d_model, self.d_model)
+        self.k_attn = nn.Linear(self.d_model, self.d_model)
+        self.v_attn = nn.Linear(self.d_model, self.d_model)
+        self.out_proj = nn.Linear(self.d_model, self.d_model)
         self.out_proj.is_residual = True # Mark as residual for down scaling in weight initialization
-        self.attn_dropout = nn.Dropout(dropout)
-        self.register_buffer("mask", torch.ones(max_seq_len, max_seq_len).tril().bool()) # Causal mask for attention
+        self.attn_dropout = nn.Dropout(self.dropout)
+        self.register_buffer("mask", torch.ones(config.max_seq_len, config.max_seq_len).tril().bool()) # Causal mask for attention
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
@@ -45,12 +45,12 @@ class MultiHeadAttention(nn.Module):
 
 class FeedForward(nn.Module):
     """Simple Feed-Forward Network with GELU activation."""
-    def __init__(self, d_model: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.linear1 = nn.Linear(d_model, 4*d_model)
+        self.linear1 = nn.Linear(config.d_model, 4 * config.d_model)
         self.gelu = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(4*d_model, d_model)
+        self.dropout = nn.Dropout(config.dropout)
+        self.linear2 = nn.Linear(4 * config.d_model, config.d_model)
         self.linear2.is_residual = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -61,12 +61,12 @@ class FeedForward(nn.Module):
 
 class TransformerBlock(nn.Module):
     """Single Transformer block consisting of Multi-Head Attention and Feed-Forward Network."""
-    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, dropout: float = 0.0) -> None:
+    def __init__(self, config: Config) -> None:
         super().__init__()
-        self.attn = MultiHeadAttention(d_model, num_heads, max_seq_len, dropout)
-        self.ffn = FeedForward(d_model, dropout)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        self.attn = MultiHeadAttention(config)
+        self.ffn = FeedForward(config)
+        self.norm1 = nn.LayerNorm(config.d_model)
+        self.norm2 = nn.LayerNorm(config.d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x))
@@ -81,7 +81,7 @@ class TransformerDecoder(nn.Module):
         self.token_embed = nn.Embedding(config.vocab_size, config.d_model)
         self.positional_embed = nn.Embedding(config.max_seq_len, config.d_model)
         self.register_buffer("positional_ids", torch.arange(config.max_seq_len).unsqueeze(0).expand(1, config.max_seq_len))
-        self.layers = nn.ModuleList([TransformerBlock(config.d_model, config.num_heads, config.max_seq_len, config.dropout) for _ in range(config.num_layers)])
+        self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_layers)])
         self.norm = nn.LayerNorm(config.d_model)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False) # No bias because token_embed has no bias
         self.lm_head.weight = self.token_embed.weight # Weight tying
