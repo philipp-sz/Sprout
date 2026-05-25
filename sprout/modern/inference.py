@@ -61,9 +61,9 @@ if __name__ == "__main__":
         model=model,
         tokenizer=FastBPETokenizer.load(tokenizer_path),
         config=config,
-        prompt="Newton's second law states that ",
+        prompt=r"""The water cycle describes how water moves through the environment. First,""",
         max_new_tokens=100,
-        temperature=0.5,
+        temperature=0.6,
         top_k=None,
         top_p=0.9,
         device=config.device

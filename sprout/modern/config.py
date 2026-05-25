@@ -31,8 +31,8 @@ class Config:
     batches_in_val: int = 100
     eval_interval: int = 500
     checkpoint_interval: int = 1000
-    wsd_warmup: float = 0.02
-    wsd_decay: float = 0.10
+    warmup: float = 0.02
+    decay: float = 0.10
     # Device configuration
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
@@ -44,8 +44,8 @@ class Config:
     def __post_init__(self):
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len
         self.max_iterations = self.num_training_tokens // self.effective_batch_size
-        self.warmup_steps = max(1, int(self.max_iterations * self.wsd_warmup))
-        self.decay_steps = self.max_iterations - max(1, int(self.max_iterations * self.wsd_decay))
+        self.warmup_steps = max(1, int(self.max_iterations * self.warmup))
+        self.decay_steps = self.max_iterations - max(1, int(self.max_iterations * self.decay))
 
     def to_dict(self) -> dict:
         """Converts the Config dataclass to a dictionary and converts all Path objects to strings."""
@@ -65,11 +65,13 @@ class Config:
         """Computes the learning rate for the current step based on a cosine decay schedule with linear warmup."""
         if step < self.warmup_steps: # Initial warmup
             return self.max_learning_rate * (step + 1) / self.warmup_steps
+
         if step >= self.max_iterations: # Ensure learning rate does not cause divergence after max iterations
             return 0.0        
 
-        if step >= self.decay_steps: # After decay, clamp at min
+        if step >= self.decay_steps:
             progress = (step - self.decay_steps) / (self.max_iterations - self.decay_steps)
             coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
             return coeff * self.max_learning_rate
+        
         return self.max_learning_rate

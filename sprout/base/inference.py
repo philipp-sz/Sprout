@@ -52,14 +52,7 @@ if __name__ == "__main__":
     config = Config(**checkpoint["config"])
     config.convert_paths()
 
-    model = TransformerDecoder(
-        num_layers=config.num_layers,
-        d_model=config.d_model,
-        num_heads=config.num_heads,
-        max_seq_len=config.max_seq_len,
-        vocab_size=config.vocab_size,
-        dropout=config.dropout
-    ).to(config.device)
+    model = TransformerDecoder(config).to(config.device)
 
     model = model.to(torch.bfloat16)
     model = torch.compile(model)
@@ -68,15 +61,9 @@ if __name__ == "__main__":
         model=model,
         tokenizer=FastBPETokenizer.load(tokenizer_path),
         config=config,
-        prompt="""The powerhouse of the cell is the:
-                    A. Nucleus
-                    B. Mitochondria
-                    C. Ribosome
-                    D. Golgi apparatus
-
-                  Answer: """,
-        max_new_tokens=1,
-        temperature=0.2,
+        prompt="""The water cycle describes how water moves through the environment. First,""",
+        max_new_tokens=100,
+        temperature=0.8,
         top_k=None,
         top_p=0.9,
         device=config.device
