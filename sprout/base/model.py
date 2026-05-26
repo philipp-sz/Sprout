@@ -1,7 +1,7 @@
 import warnings
 
 import torch
-from torch import nn
+from torch import nn, Tensor
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.optim import AdamW
@@ -24,7 +24,7 @@ class MultiHeadAttention(nn.Module):
         self.attn_dropout = nn.Dropout(self.dropout)
         self.register_buffer("mask", torch.ones(config.max_seq_len, config.max_seq_len).tril().bool()) # Causal mask for attention
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size()
         q = self.q_attn(x).view(B, T, self.num_heads, C // self.num_heads).transpose(1, 2)
         k = self.k_attn(x).view(B, T, self.num_heads, C // self.num_heads).transpose(1, 2)
@@ -53,7 +53,7 @@ class FeedForward(nn.Module):
         self.linear2 = nn.Linear(4 * config.d_model, config.d_model)
         self.linear2.is_residual = True
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         x = self.linear1(x)
         x = self.gelu(x)
         x = self.dropout(x)
@@ -68,7 +68,7 @@ class TransformerBlock(nn.Module):
         self.norm1 = nn.LayerNorm(config.d_model)
         self.norm2 = nn.LayerNorm(config.d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         x = x + self.attn(self.norm1(x))
         x = x + self.ffn(self.norm2(x))
         return x
@@ -88,7 +88,7 @@ class TransformerDecoder(nn.Module):
         self.config = config
         self.apply(self._init_weights)
         
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: Tensor) -> Tensor:
         B, T = input_ids.size()
         token_embeddings = self.token_embed(input_ids)
         positional_ids = self.positional_ids[:, :T]

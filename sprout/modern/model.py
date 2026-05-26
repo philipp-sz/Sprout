@@ -1,7 +1,7 @@
 import warnings
 
 import torch
-from torch import nn
+from torch import nn, Tensor
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.optim import AdamW, Muon
@@ -9,27 +9,64 @@ from torch.optim import AdamW, Muon
 from sprout.modern.config import Config
 
 
+class KVCache:
+    """Key-Value Cache for storing past keys and values during autoregressive decoding."""
+    def __init__(self, config: Config, batch_size: int):
+        self.max_seq_len = config.max_seq_len
+        self.cur_step = 0  # Tracks where to insert the next token
+        
+        # Pre-allocate with max_seq_len
+        self.k_cache = torch.zeros(config.num_layers, batch_size, config.num_kv_heads, config.max_seq_len, config.head_dim, device=config.device, dtype=config.dtype)
+        self.v_cache = torch.zeros(config.num_layers, batch_size, config.num_kv_heads, config.max_seq_len, config.head_dim, device=config.device, dtype=config.dtype)
+
+    def update(self, layer_idx: int, k_new: torch.Tensor, v_new: torch.Tensor, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Updates the cache with new keys and values for the current decoding step."""
+        next_pos = self.cur_step + seq_len
+        if next_pos > self.max_seq_len:
+            warnings.warn("KV Cache overflow: maximum sequence length exceeded. Oldest token will be dropped. Will cause inefficiency.")
+            self._shift_cache()
+
+        self.k_cache[layer_idx, :, :, self.cur_step:next_pos, :] = k_new
+        self.v_cache[layer_idx, :, :, self.cur_step:next_pos, :] = v_new
+        if layer_idx == self.k_cache.size(0) - 1: # Only update once per forward pass
+            self.cur_step += seq_len
+
+        return self.k_cache[layer_idx, :, :, :next_pos, :], self.v_cache[layer_idx, :, :, :next_pos, :]
+
+    @property
+    def current_step(self) -> int:
+        """Returns the current decoding step, which indicates how many tokens are currently in the cache."""
+        return self.cur_step
+
+    def _shift_cache(self):
+        """Shifts the cache to the left by one token to make room for new tokens when max sequence length is exceeded."""
+        padding_shape = (0, 0, 0, 1, 0)
+        shifted_k = self.k_cache[:, :, :, 1:, :]
+        shifted_v = self.v_cache[:, :, :, 1:, :]
+        self.k_cache = torch.pad(shifted_k, padding_shape, value=0.0)
+        self.v_cache = torch.pad(shifted_v, padding_shape, value=0.0)
+        self.cur_step -= 1
+
 class RotaryEmbedding(nn.Module):
     """Rotary Positional Embedding (RoPE) module."""
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.head_dim = config.d_model // config.num_heads
         self.max_seq_len = config.max_seq_len
         self.base_freq = config.rope_base_freq
 
-        inv_freq = 1.0 / (self.base_freq ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
+        inv_freq = 1.0 / (self.base_freq ** (torch.arange(0, config.head_dim, 2).float() / config.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.sin_cached = None
         self.cos_cached = None
         self._set_cos_sin_cache(self.max_seq_len) # Precompute cos and sin values for the maximum sequence length
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, seq_len: int) -> torch.Tensor:
+    def forward(self, q: Tensor, k: Tensor, seq_len: int, pos_offset: int | None = None) -> Tensor:
         """Applies rotary positional embeddings to the input tensor."""
         if seq_len > self.max_seq_len: # Recompute cache if sequence length exceeds current max
             self.max_seq_len = seq_len
             self._set_cos_sin_cache(seq_len)
 
-        return self._apply_rotary_pos_emb(q, k, seq_len)
+        return self._apply_rotary_pos_emb(q, k, seq_len, pos_offset)
 
     def _set_cos_sin_cache(self, seq_len: int) -> None:
         """Precomputes and caches the cosine and sine values for the given sequence length."""
@@ -41,18 +78,18 @@ class RotaryEmbedding(nn.Module):
         self.cos_cached = emb.cos().unsqueeze(0).unsqueeze(2) # Shape (1, seq_len, 1, head_dim)
         self.sin_cached = emb.sin().unsqueeze(0).unsqueeze(2) # Shape (1, seq_len, 1, head_dim)
 
-    def _apply_rotary_pos_emb(self, q: torch.Tensor, k: torch.Tensor, seq_len: int) -> torch.Tensor:
+    def _apply_rotary_pos_emb(self, q: Tensor, k: Tensor, seq_len: int, pos_offset: int | None = None) -> Tensor:
         """Applies the precomputed rotary positional embeddings to the query and key tensors."""
         # Slice the cached cos and sin values to match the current sequence length
-        cos = self.cos_cached[:, :seq_len, :, :].to(device=q.device, dtype=q.dtype)
-        sin = self.sin_cached[:, :seq_len, :, :].to(device=q.device, dtype=q.dtype)
+        cos = self.cos_cached[:, pos_offset:pos_offset + seq_len, :, :].to(device=q.device, dtype=q.dtype)
+        sin = self.sin_cached[:, pos_offset:pos_offset + seq_len, :, :].to(device=q.device, dtype=q.dtype)
 
         q_rotated = (q * cos) + (self._rotate_half(q) * sin)
         k_rotated = (k * cos) + (self._rotate_half(k) * sin)
 
         return q_rotated, k_rotated
 
-    def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:
+    def _rotate_half(self, x: Tensor) -> Tensor:
         """Rotates half the hidden dims of the input to efficiently compute the rotation."""
         x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
@@ -78,7 +115,7 @@ class MultiHeadAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.register_buffer("mask", torch.ones(config.max_seq_len, config.max_seq_len).tril().bool()) # Causal mask for attention
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor, kv_cache: KVCache | None = None, layer_idx: int | None = None) -> Tensor:
         B, T, C = x.size()
         q = self.q_attn(x).view(B, T, self.num_heads, self.head_size)
         k = self.k_attn(x).view(B, T, self.num_kv_heads, self.head_size)
@@ -86,29 +123,39 @@ class MultiHeadAttention(nn.Module):
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        q, k = self.rope(q, k, seq_len=T) 
+        pos_offset = kv_cache.current_step if kv_cache is not None else 0
+        q, k = self.rope(q, k, seq_len=T, pos_offset=pos_offset) 
         q = q.transpose(1, 2) 
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
+        if kv_cache is not None:
+            k, v = kv_cache.update(layer_idx=layer_idx, k_new=k, v_new=v, seq_len=T)
+
         try:
-            with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-                attn_output = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True, dropout_p=self.dropout if self.training else 0.0)
+            with sdpa_kernel(SDPBackend.FLASH_ATTENTION): # Enfore Flash Attention, not the fallback
+                is_causal = (kv_cache is None) # causal during prefill, not during decode
+                attn_output = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, enable_gqa=True, dropout_p=self.dropout if self.training else 0.0)
         except RuntimeError: # Fallback to manual attention if Flash Attention is not available
             warnings.warn("Flash Attention not available, falling back to manual attention implementation.")
-            # Repeat keys and values to match queries for GQA
-            groups = self.num_heads // self.num_kv_heads
-            k = k.repeat_interleave(groups, dim=1)
-            v = v.repeat_interleave(groups, dim=1)
-
-            scale_factor = (C // self.num_heads) ** -0.5
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) * scale_factor
-            attn_scores = attn_scores.masked_fill(~self.mask[:T, :T], float("-inf")) # Slice mask to match sequence length and fill with -inf
-            attn_weights = torch.softmax(attn_scores, dim=-1)
-            attn_weights = self.attn_dropout(attn_weights)
-            attn_output = torch.matmul(attn_weights, v)
+            attn_output = self._calc_manual_attention(q, k, v, C, T)
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, C) # Reshape back to input shape
         return self.out_proj(attn_output)
+    
+    def _calc_manual_attention(self, q: Tensor, k: Tensor, v: Tensor, C: int, T: int) -> Tensor:
+        """Manual implementation of scaled dot-product attention with causal masking."""
+        # Repeat keys and values to match queries for GQA
+        groups = self.num_heads // self.num_kv_heads
+        k = k.repeat_interleave(groups, dim=1)
+        v = v.repeat_interleave(groups, dim=1)
+
+        scale_factor = (C // self.num_heads) ** -0.5
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) * scale_factor
+        attn_scores = attn_scores.masked_fill(~self.mask[:T, :T], float("-inf")) # Slice mask to match sequence length and fill with -inf
+        attn_weights = torch.softmax(attn_scores, dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
+        attn_output = torch.matmul(attn_weights, v)
+        return attn_output
 
 class FeedForward(nn.Module):
     """Simple Feed-Forward Network with ReLU^2 activation."""
@@ -119,7 +166,7 @@ class FeedForward(nn.Module):
         self.linear2 = nn.Linear(int(config.mlp_expansion*config.d_model), config.d_model, bias=False)
         self.linear2.is_residual = True
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         x = self.linear1(x)
         x = F.relu(x).square()
         x = self.dropout(x)
@@ -134,8 +181,8 @@ class TransformerBlock(nn.Module):
         self.norm1 = nn.RMSNorm(config.d_model)
         self.norm2 = nn.RMSNorm(config.d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x))
+    def forward(self, x: Tensor, kv_cache: KVCache | None = None, layer_idx: int | None = None) -> Tensor:
+        x = x + self.attn(self.norm1(x), kv_cache=kv_cache, layer_idx=layer_idx)
         x = x + self.ffn(self.norm2(x))
         return x
 
@@ -151,12 +198,17 @@ class TransformerDecoder(nn.Module):
         self.lm_head.weight = self.token_embed.weight # Weight tying
         self.config = config
         self.apply(self._init_weights)
-        
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+
+    def __call__(self, input_ids: Tensor, kv_cache: KVCache | None = None) -> Tensor:
+        return self.forward(input_ids, kv_cache)
+
+    def forward(self, input_ids: Tensor, kv_cache: KVCache | None = None) -> tuple[Tensor, list[tuple[Tensor, Tensor]]]:
         x = self.token_embed(input_ids)
 
-        for layer in self.layers:
-            x = layer(x)
+        for i, layer in enumerate(self.layers):
+            layer_idx = i if kv_cache is not None else None
+            x = layer(x, kv_cache=kv_cache, layer_idx=layer_idx)
+
         x = self.norm(x)
         return self.lm_head(x)
 

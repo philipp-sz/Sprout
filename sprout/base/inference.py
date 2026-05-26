@@ -9,10 +9,10 @@ from sprout.tokenizer import FastBPETokenizer
 
 @torch.no_grad()
 def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Config, prompt: str,
-            max_new_tokens: int, temperature: float, top_k: int = None, top_p: float = None, device: torch.device = "cpu") -> str:
+            max_new_tokens: int, temperature: float, top_k: int = None, top_p: float = None) -> str:
     model.eval()
     token_ids = tokenizer.encode(prompt)
-    token_ids = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0) # Shape: [1, seq_len]
+    token_ids = torch.tensor(token_ids, dtype=torch.long, device=config.device).unsqueeze(0) # Shape: [1, seq_len]
 
     for _ in range(max_new_tokens):
         if token_ids.size(1) > config.max_seq_len:
@@ -66,6 +66,5 @@ if __name__ == "__main__":
         temperature=0.8,
         top_k=None,
         top_p=0.9,
-        device=config.device
     )
     print(generated_text)

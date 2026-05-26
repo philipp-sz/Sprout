@@ -42,6 +42,7 @@ class Config:
     log_path: Path = Path(__file__).parent.parent / "logs" / "modern_training_mixture_log.json"
 
     def __post_init__(self):
+        self.head_dim = self.d_model // self.num_heads
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len
         self.max_iterations = self.num_training_tokens // self.effective_batch_size
         self.warmup_steps = max(1, int(self.max_iterations * self.warmup))

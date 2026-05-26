@@ -3,22 +3,21 @@ from pathlib import Path
 import torch
 
 from sprout.modern.config import Config
-from sprout.modern.model import TransformerDecoder
+from sprout.modern.model import TransformerDecoder, KVCache
 from sprout.tokenizer import FastBPETokenizer
 
 
 @torch.no_grad()
 def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Config, prompt: str,
-            max_new_tokens: int, temperature: float, top_k: int = None, top_p: float = None, device: torch.device = "cpu") -> str:
+            max_new_tokens: int, temperature: float, top_k: int = None, top_p: float = None) -> str:
     model.eval()
-    token_ids = tokenizer.encode(prompt)
-    token_ids = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0) # Shape: [1, seq_len]
+    token_ids_list = tokenizer.encode(prompt)
+    token_ids = torch.tensor(token_ids_list, dtype=torch.long, device=config.device).unsqueeze(0) # Shape: [1, seq_len]
+    kv_cache = KVCache(config, batch_size=1)
+    model_output = model(token_ids, kv_cache=kv_cache) # Prefill the KV cache with the prompt tokens
 
+    generated_tokens = list(token_ids_list)
     for _ in range(max_new_tokens):
-        if token_ids.size(1) > config.max_seq_len:
-            token_ids = token_ids[:, -config.max_seq_len:]
-
-        model_output = model(token_ids)
         new_token_logits = model_output[:, -1, :] / max(temperature, 1e-8)
 
         if top_k is not None and top_k > 0:
@@ -39,10 +38,12 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
 
         if next_token.item() == tokenizer.eot_token:
             break
-        token_ids = torch.cat((token_ids, next_token), dim=-1)
+
+        generated_tokens.append(next_token.item())
+        model_output = model(next_token, kv_cache=kv_cache)
 
 
-    return tokenizer.decode(token_ids.squeeze(0).tolist())
+    return tokenizer.decode(generated_tokens)
 
 if __name__ == "__main__":
     checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "base" / "model_final.pt"
@@ -61,11 +62,10 @@ if __name__ == "__main__":
         model=model,
         tokenizer=FastBPETokenizer.load(tokenizer_path),
         config=config,
-        prompt=r"""The water cycle describes how water moves through the environment. First,""",
+        prompt=r"""The water cycle describes how water moves through the environment. First, the sun heats up water in rivers, lakes, or oceans, causing it to evaporate and turn into vapor. This vapor rises into the air and cools down, forming clouds through condensation. When the clouds become heavy with water droplets, they release the water as precipitation, such as rain or snow. The precipitation then collects in bodies of water, and the cycle starts again.""",
         max_new_tokens=100,
         temperature=0.6,
         top_k=None,
         top_p=0.9,
-        device=config.device
     )
     print(generated_text)
