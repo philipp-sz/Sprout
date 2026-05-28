@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import torch
 import numpy as np
 from tqdm import tqdm
-from datasets import load_dataset, interleave_datasets
+from datasets import IterableDataset, load_dataset, interleave_datasets
 
 from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
 
@@ -26,7 +26,7 @@ class DatasetProcessor:
     """
     Loads a dataset, tokenizes it, and saves the tokenized data in shards.
     Args:
-        mixtures (list[float]): The mixture probabilities for base, and math datasets.
+        dataset_mixture (dict[IterableDataset, float]): A dictionary mapping datasets to their mixture probabilities.
         metadata_path (str): The path where metadata is saved.
         output_dir (str): The directory where the tokenized data will be saved.
         tokenizer_state_path (str): The path to the tokenizer state.
@@ -35,9 +35,9 @@ class DatasetProcessor:
         shard_size (int): The number of samples per shard.
         num_tokens (int): The number of tokens to stream from the dataset.
     """
-    def __init__(self, mixture_probabilites: list[float], metadata_path: str, output_dir: str,
+    def __init__(self, dataset_mixture: dict[IterableDataset, float], metadata_path: str, output_dir: str,
                 tokenizer_state_path: str,num_workers: int, imap_chunksize: int, shard_size: int, num_tokens: int) -> None:
-        self.mixture_probabilites = mixture_probabilites
+        self.dataset_mixture = dataset_mixture
         self.metadata_path = Path(metadata_path)
         self.output_dir = Path(output_dir)
         self.tokenizer_state_path = tokenizer_state_path
@@ -77,7 +77,7 @@ class DatasetProcessor:
                     remaining = min(len(token_buffer), self.num_tokens - num_total_tokens)
                     self._save_shard(metadata, remaining, token_buffer[:remaining], rows_in_shard)
                     pbar.update(remaining)
-    
+
     def _initialize_processing(self) -> tuple[dict, Iterator, int]:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         metadata = self.load_metadata() # Load or create metadata 
@@ -87,11 +87,9 @@ class DatasetProcessor:
         num_total_rows = proj_state["num_total_rows"]
         num_total_tokens = proj_state["num_total_tokens"]
 
-        base_ds = load_dataset("HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled", split="train", streaming=True)
-        math_ds = load_dataset("HuggingFaceTB/finemath", name="finemath-4plus", split="train", streaming=True)
         ds = interleave_datasets(
-            datasets=[base_ds, math_ds],
-            probabilities=self.mixture_probabilites,
+            datasets=list(self.dataset_mixture.keys()),
+            probabilities=list(self.dataset_mixture.values()),
             seed=42, # Reproducibility of the interleaving for consistency
             stopping_strategy="all_exhausted"
         )

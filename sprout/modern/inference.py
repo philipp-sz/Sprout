@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import torch
@@ -11,6 +12,7 @@ from sprout.tokenizer import FastBPETokenizer
 def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Config, prompt: str,
             max_new_tokens: int, temperature: float, top_k: int = None, top_p: float = None) -> str:
     model.eval()
+    print(prompt, end="", flush=True)
     token_ids_list = tokenizer.encode(prompt)
     token_ids = torch.tensor(token_ids_list, dtype=torch.long, device=config.device).unsqueeze(0) # Shape: [1, seq_len]
     kv_cache = KVCache(config, batch_size=1)
@@ -41,7 +43,7 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
 
         generated_tokens.append(next_token.item())
         model_output = model(next_token, kv_cache=kv_cache)
-
+        print(tokenizer.decode([next_token.item()]), end="", flush=True) # Stream generated tokens
 
     return tokenizer.decode(generated_tokens)
 
@@ -49,6 +51,7 @@ if __name__ == "__main__":
     checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "base" / "model_final.pt"
     tokenizer_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    logging.getLogger("torch._inductor").setLevel(logging.ERROR) # Suppressmax_autotune_gemm mode warning
 
     config = Config(**checkpoint["config"])
     config.convert_paths()
@@ -56,16 +59,21 @@ if __name__ == "__main__":
     model = TransformerDecoder(config).to(config.device)
 
     model = model.to(torch.bfloat16)
-    model = torch.compile(model)
+    model = torch.compile(model, options={"max_autotune": False, "max_autotune_gemm": False})
     model.load_state_dict(checkpoint["model"])
     generated_text = generate(
         model=model,
         tokenizer=FastBPETokenizer.load(tokenizer_path),
         config=config,
-        prompt=r"""The water cycle describes how water moves through the environment. First, the sun heats up water in rivers, lakes, or oceans, causing it to evaporate and turn into vapor. This vapor rises into the air and cools down, forming clouds through condensation. When the clouds become heavy with water droplets, they release the water as precipitation, such as rain or snow. The precipitation then collects in bodies of water, and the cycle starts again.""",
+        prompt=r"""The water cycle describes how water moves through the environment. First,""",
         max_new_tokens=100,
-        temperature=0.6,
+        temperature=0.8,
         top_k=None,
-        top_p=0.9,
+        top_p=0.95,
     )
-    print(generated_text)
+
+
+# TODOs:
+# 1. Make dataprocessing universal, so that you can pass whatever dataset and mixture directly, without hard-coding
+# 2. Implement streaming for inference and potentially repetition penalty (?)
+# 3. Implement evaluation properly
