@@ -25,6 +25,7 @@ class Config:
     grad_accum_steps: int = 16
     grad_clip: float = 1.0
     batches_in_val: int = 100
+    eval_benchmark_samples: int = 1000
     eval_interval: int = 500
     checkpoint_interval: int = 1000
     # Device configuration
@@ -33,7 +34,8 @@ class Config:
     # Directories
     save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "base"
     shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "base_shards"
-    log_path: Path = Path(__file__).parent.parent / "logs" / "base_training_log.json"
+    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "base_training_log.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
 
     def __post_init__(self):
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len
@@ -47,6 +49,7 @@ class Config:
         config_dict["save_dir"] = str(self.save_dir)
         config_dict["shards_dir"] = str(self.shards_dir)
         config_dict["log_path"] = str(self.log_path)
+        config_dict["tokenizer_path"] = str(self.tokenizer_path)
         return config_dict
 
     def convert_paths(self):
@@ -54,6 +57,7 @@ class Config:
         self.save_dir = Path(self.save_dir)
         self.shards_dir = Path(self.shards_dir)
         self.log_path = Path(self.log_path)
+        self.tokenizer_path = Path(self.tokenizer_path)
 
     def get_lr(self, step: int) -> float:
         """Computes the learning rate for the current step based on a cosine decay schedule with linear warmup."""

@@ -160,7 +160,7 @@ class TokenDataLoader:
         self.shard_tokens = None # Initialize the current shard tokens
         self.shard_files = self._get_shard_files()
 
-    def get_batch(self) -> tuple:
+    def get_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Retrieves a batch of tokenized data from the current shard, loading new shards as needed."""
         B, T = self.batch_size, self.seq_len
         if self.shard_tokens is None or self.cur_pos + B * T + 1 > len(self.shard_tokens):
@@ -173,7 +173,7 @@ class TokenDataLoader:
         self.cur_pos += B * T 
         return x, y
 
-    def _get_shard_files(self) -> list:
+    def _get_shard_files(self) -> list[Path]:
         """Retrieves and sorts the list of shard files for the specified split."""
         shard_files = sorted(Path(self.shards_dir).glob("shard_*.npy"))
         if self.split == "val":
@@ -191,7 +191,7 @@ class TokenDataLoader:
         self.cur_pos = 0
 
     @property
-    def get_state(self) -> dict:
+    def get_state(self) -> dict[str, int]:
         """Returns the current state of the data loader, including shard index and position."""
         return {
             "shard_idx": self.shard_idx,
@@ -199,7 +199,7 @@ class TokenDataLoader:
         }
 
     @get_state.setter
-    def set_state(self, state: dict) -> None:
+    def set_state(self, state: dict[str, int]) -> None:
         """Sets the state of the data loader to the specified shard index and position."""
         self.shard_idx = state["shard_idx"]
         self.cur_pos = state["cur_pos"]

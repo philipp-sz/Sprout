@@ -48,7 +48,6 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
 
 if __name__ == "__main__":
     checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "base" / "model_final.pt"
-    tokenizer_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     logging.getLogger("torch._inductor").setLevel(logging.ERROR) # Suppressmax_autotune_gemm mode warning
 
@@ -62,7 +61,7 @@ if __name__ == "__main__":
     model.load_state_dict(checkpoint["model"])
     generated_text = generate(
         model=model,
-        tokenizer=FastBPETokenizer.load(tokenizer_path),
+        tokenizer=FastBPETokenizer.load(config.tokenizer_path),
         config=config,
         prompt="""The water cycle describes how water moves through the environment. First,""",
         max_new_tokens=100,

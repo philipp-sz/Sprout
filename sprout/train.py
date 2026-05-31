@@ -1,10 +1,14 @@
 import json
 import os
 from pathlib import Path
+import time
 
 from tqdm import trange
 import torch
 import torch.nn.functional as F
+
+from sprout.eval import Evaluator
+from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
 
 
 class TrainingLogger:
@@ -13,7 +17,7 @@ class TrainingLogger:
         self.records = []
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def log(self, step: int, train_loss: float, eval_loss: float, lr: float, grad_norm: float):
+    def log(self, step: int, train_loss: float, eval_loss: float, lr: float, grad_norm: float, token_per_sec: float, benchmark_results: dict[str, float]):
         if not self.records and os.path.exists(self.log_path):
             with open(self.log_path, "r") as f:
                 loaded_records = json.load(f)
@@ -27,6 +31,8 @@ class TrainingLogger:
             "eval_loss": eval_loss,
             "lr": lr,
             "grad_norm": grad_norm,
+            "token_per_sec": token_per_sec,
+            "benchmarks": benchmark_results
         })
         with open(self.log_path, "w") as f:
             json.dump(self.records, f, indent=2)
@@ -48,6 +54,8 @@ class Trainer:
         self.config = config
         self.start_step = 1
         self.logger = TrainingLogger(config.log_path)
+        self.tokenizer = FastBPETokenizer.load(config.tokenizer_path)
+        self.evaluator = Evaluator(model, self.tokenizer, device=config.device, prefix_token_id=self.tokenizer.eot_token)
 
         raw_optims = optimizers if optimizers is not None else model.configure_optimizers(config)
         if isinstance(raw_optims, (list, tuple)):
@@ -60,6 +68,8 @@ class Trainer:
     def train(self) -> None:
         """Main training loop that iterates over the specified number of iterations, performs training steps, evaluates periodically, and saves checkpoints."""
         self._print_summary()
+        tokens_since_last_eval = 0
+        last_eval_time = time.perf_counter()
         for step in trange(self.start_step, self.config.max_iterations + 1, desc="Training..."):
             train_loss = 0.0
             self.model.train()
@@ -74,6 +84,7 @@ class Trainer:
                     loss = loss / self.config.grad_accum_steps
                 loss.backward()
                 train_loss += loss.item() # Keep scaled down so it reflects the average loss per micro batch
+                tokens_since_last_eval += x.numel()
 
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
             lr = self.config.get_lr(step)
@@ -85,16 +96,22 @@ class Trainer:
                 optim.step()
 
             if step % self.config.eval_interval == 0:
-                eval_loss = self.evaluate()
-                self.logger.log(step, train_loss, eval_loss, lr, grad_norm.item())
-                print(f"Step {step}: Train Loss = {train_loss:.4f}, Eval Loss = {eval_loss:.4f}")
+                now = time.perf_counter()
+                elapsed = now - last_eval_time
+                token_per_sec = tokens_since_last_eval / elapsed
+                eval_loss, benchmark_results = self.evaluate()
+
+                self.logger.log(step, train_loss, eval_loss, lr, grad_norm.item(), token_per_sec, benchmark_results)
+                print(f"Step {step}: Train Loss = {train_loss:.4f}, Eval Loss = {eval_loss:.4f}, Tokens/sec = {token_per_sec:.2f}")
+                tokens_since_last_eval = 0
+                last_eval_time = now
 
             if step % self.config.checkpoint_interval == 0:
                 self._save_checkpoint(train_loss, eval_loss, step)
         self._save_final()
 
-    def evaluate(self) -> float:
-        """Evaluates the model on the validation set and returns the average loss."""
+    def evaluate(self) -> tuple[float, dict[str, float]]:
+        """Evaluates the model on the validation set and returns the average loss and benchmark results."""
         self.model.eval()
         total_loss = 0.0
         with torch.no_grad():
@@ -104,9 +121,11 @@ class Trainer:
                     logits = self.model(x)
                     loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), y.view(-1))
                 total_loss += loss.item()
-        return total_loss / self.config.batches_in_val
+        eval_loss = total_loss / self.config.batches_in_val
+        benchmark_results = self.evaluator.run_standard_suite(total_samples=self.config.eval_benchmark_samples)
+        return eval_loss, benchmark_results
 
-    def _save_checkpoint(self, total_train_loss, total_eval_loss, step_num):
+    def _save_checkpoint(self, total_train_loss: float, total_eval_loss: float, step_num: int):
         """Saves the model checkpoint to disk, including model state, optimizer state, config, and training statistics."""
         state_dict = {
             "model": self.model.state_dict(),
@@ -116,7 +135,7 @@ class Trainer:
             "val_loader_state": self.val_loader.get_state,
             "total_train_loss": total_train_loss,
             "total_eval_loss": total_eval_loss,
-            "step_num": step_num
+            "step_num": step_num,
         }
         checkpoint_path = self.config.save_dir / f"checkpoint_step_{step_num}.pt"
         self.config.save_dir.mkdir(parents=True, exist_ok=True)
