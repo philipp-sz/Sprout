@@ -71,38 +71,16 @@ class Trainer:
         tokens_since_last_eval = 0
         last_eval_time = time.perf_counter()
         for step in trange(self.start_step, self.config.max_iterations + 1, desc="Training..."):
-            train_loss = 0.0
-            self.model.train()
-            for optim in self.optimizers:
-                optim.zero_grad(set_to_none=True)
-
-            for _ in range(self.config.grad_accum_steps):
-                x, y = self.train_loader.get_batch()
-                with torch.autocast(device_type=self.config.device, dtype=self.config.dtype):
-                    logits = self.model(x)
-                    loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), y.view(-1))
-                    loss = loss / self.config.grad_accum_steps
-                loss.backward()
-                train_loss += loss.item() # Keep scaled down so it reflects the average loss per micro batch
-                tokens_since_last_eval += x.numel()
-
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
-            lr = self.config.get_lr(step)
-            for opt in self.optimizers:
-                for param_group in opt.param_groups:
-                    param_group["lr"] = lr
-
-            for optim in self.optimizers:
-                optim.step()
+            train_loss, grad_norm, step_tokens = self._perform_train_step(step)
+            tokens_since_last_eval += step_tokens
 
             if step % self.config.eval_interval == 0:
                 now = time.perf_counter()
-                elapsed = now - last_eval_time
-                token_per_sec = tokens_since_last_eval / elapsed
+                token_per_sec = tokens_since_last_eval / (now - last_eval_time)
                 eval_loss, benchmark_results = self.evaluate()
-
-                self.logger.log(step, train_loss, eval_loss, lr, grad_norm.item(), token_per_sec, benchmark_results)
+                self.logger.log(step, train_loss, eval_loss, self.config.get_lr(step), grad_norm.item(), token_per_sec, benchmark_results)
                 print(f"Step {step}: Train Loss = {train_loss:.4f}, Eval Loss = {eval_loss:.4f}, Tokens/sec = {token_per_sec:.2f}")
+
                 tokens_since_last_eval = 0
                 last_eval_time = now
 
@@ -124,6 +102,32 @@ class Trainer:
         eval_loss = total_loss / self.config.batches_in_val
         benchmark_results = self.evaluator.run_standard_suite(total_samples=self.config.eval_benchmark_samples)
         return eval_loss, benchmark_results
+    
+    def _perform_train_step(self, step: int) -> tuple[float, float, int]:
+        train_loss = 0.0
+        self.model.train()
+        step_tokens = 0
+        for optim in self.optimizers:
+            optim.zero_grad(set_to_none=True)
+
+        for _ in range(self.config.grad_accum_steps):
+            x, y = self.train_loader.get_batch()
+            with torch.autocast(device_type=self.config.device, dtype=self.config.dtype):
+                logits = self.model(x)
+                loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), y.view(-1))
+                loss = loss / self.config.grad_accum_steps
+            loss.backward()
+            train_loss += loss.item() # Keep scaled down so it reflects the average loss per micro batch
+            step_tokens += x.numel()
+
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+        lr = self.config.get_lr(step)
+        for optim in self.optimizers:
+            for param_group in optim.param_groups:
+                param_group["lr"] = lr
+            optim.step()
+
+        return train_loss, grad_norm.item(), step_tokens
 
     def _save_checkpoint(self, total_train_loss: float, total_eval_loss: float, step_num: int):
         """Saves the model checkpoint to disk, including model state, optimizer state, config, and training statistics."""
