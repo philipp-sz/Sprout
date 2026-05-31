@@ -6,16 +6,18 @@ from datasets import load_dataset
 from sprout.data.data_processing import DatasetProcessor
 
 
-num_tokens = 5_000_000_000
+num_tokens = 7_500_000_000
 shard_size = 100_000_000
-tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_mixed_state.json"
-metadata_path = "./metadata_mix.json"
-output_dir = "./shards/mixture_shards"
-base_ds = load_dataset("HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled", split="train", streaming=True)
+tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_state.json"
+metadata_path = "./metadata_mixed_7_5b.json"
+output_dir = "./shards/mixed_7_5b_shards"
+base_ds = load_dataset("HuggingFaceFW/fineweb-edu", split="train", streaming=True)
+code_ds = load_dataset("allenai/olmo-mix-1124", name="starcoder", split="train", streaming=True)
 math_ds = load_dataset("HuggingFaceTB/finemath", name="finemath-4plus", split="train", streaming=True)
 dataset_mixture = {
-    base_ds: 0.9,
-    math_ds: 0.1,
+    base_ds: 0.85,
+    code_ds: 0.1,
+    math_ds: 0.05,
 }
 
 processor = DatasetProcessor(

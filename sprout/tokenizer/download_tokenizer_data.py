@@ -2,16 +2,24 @@ import os
 
 from datasets import load_dataset
 
-num_base_docs = 5_000
-num_math_docs = 5_000
-training_data_path = "./training_data_mixed.txt"
+num_base_docs = 8_000 # 40%
+num_code_docs = 10_000 # 50%
+num_math_docs = 2_000 # 10%
+training_data_path = "./tokenizer_data_mixed_20k.txt"
 
 base_ds = load_dataset(
-    "HuggingFaceFW/finepdfs_edu_50BT-dclm_30BT-fineweb_edu_20BT-shuffled", 
+    "HuggingFaceFW/fineweb-edu", 
     split="train", 
     streaming=True
 )
 base_iter = iter(base_ds)
+
+code_ds = load_dataset(
+    "allenai/olmo-mix-1124",
+    name="starcoder",
+    split="train",
+    streaming=True
+)
 
 math_ds = load_dataset(
     "HuggingFaceTB/finemath", 
@@ -30,6 +38,15 @@ with open(training_data_path, "w", encoding="utf-8") as f:
         if text.strip():
             f.write(text + "\n")
             written_base += 1
+
+    # Pull Code Documents
+    written_code = 0
+    while written_code < num_code_docs:
+        row = next(code_ds)
+        text = row.get("code", "")
+        if text.strip():
+            f.write(text + "\n")
+            written_code += 1
             
     # Pull Math Documents
     written_math = 0

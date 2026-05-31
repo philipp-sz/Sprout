@@ -256,13 +256,15 @@ class FastBPETokenizer:
 
     def _init_regex(self) -> None:
         self.pattern = re.compile(r"""               # Compile the regex pattern for fast use
-                    '(?i:[sdmt]|ll|ve|re)            # Match common English contractions, e.g. 's, 'd, 'll, etc.
-                    |[^\r\n\p{L}\p{N}]?\p{L}+        # Match sequences of letters with an optional leading character like a space
-                    |\p{N}{1,3}                      # Match sequences of 1 to 3 digits
-                    |\ ?[^\s\p{L}\p{N}]+[\r\n]*      # Match characters that are letters, whitespaces or digits, followed by optional newlines, e.g. "..."
-                    |\s*[\r\n]+|\s+(?!\S)|\s+        # Match newlines and whitespace sequences
+                        '(?:[sdmt]|ll|ve|re)         # Match common English contractions, e.g. 's, 'd, 'll, etc.
+                        | \ ?\p{L}+                  # Match sequences of letters with an optional leading space
+                        | \ ?\p{N}+                  # Match sequences of digits with an optional leading space
+                        | \ ?[^\s\p{L}\p{N}]+        # Match sequences of non-alphanumeric, non-whitespace characters (e.g. punctuation), with an optional leading space
+                        | \s*[\r\n]+                 # Match sequences of newlines with optional leading whitespace
+                        | \s+(?!\S)                  # Match sequences of whitespace that are not followed by non-whitespace (i.e. trailing spaces), or multiple spaces
+                        | \s+                        # Match any other sequences of whitespace
                 """, re.X) # Allow comments and whitespace in the regex pattern
-        
+
         if self.special_tokens:
             escaped_specials = [re.escape(token) for token in self.special_tokens.keys()]
             self.special_pattern = re.compile(f"({'|'.join(escaped_specials)})") # Add parentheses to keep the delimiter in the split
