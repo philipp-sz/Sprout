@@ -55,7 +55,6 @@ class Evaluator:
             **config_kwargs
         )
 
-        print("Loading datasets...")
         lambada_ds = load_dataset("EleutherAI/lambada_openai", split="test")
         arc_easy_ds = load_dataset("allenai/ai2_arc", "ARC-Easy", split="test")
         arc_challenge_ds = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="test")

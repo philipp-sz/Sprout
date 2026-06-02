@@ -11,7 +11,7 @@ class Config:
     d_model: int = 768
     num_heads: int = 12
     num_layers: int = 12
-    max_seq_len: int = 512
+    max_seq_len: int = 1024
     vocab_size: int = 32768
     dropout: float = 0.0
     # Optimizer hyperparameters
@@ -32,10 +32,10 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
     # Directories
-    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "base"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "base_shards"
-    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "base_training_log.json"
-    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_tokenizer_state.json"
+    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "vanilla"
+    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "mixed_7_5b_shards"
+    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "vanilla_training_log.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_state.json"
 
     def __post_init__(self):
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len

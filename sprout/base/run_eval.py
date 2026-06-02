@@ -8,10 +8,9 @@ from sprout.tokenizer import FastBPETokenizer
 from sprout.data import TokenDataLoader
 
 
-checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "base" / "model_final.pt"
-log_path = Path(__file__).parent.parent / "logs" / "eval" / "base_eval_results.json"
+checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "vanilla" / "model_final.pt"
+log_path = Path(__file__).parent.parent / "logs" / "eval" / "vanilla_eval_results.json"
 checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-checkpoint["config"]["shards_dir"] = Path(__file__).parent.parent / "data" / "shards" / "base_shards"
 
 model_config = Config(**checkpoint["config"])
 model_config.convert_paths()

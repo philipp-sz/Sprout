@@ -7,6 +7,7 @@ from tqdm import trange
 import torch
 import torch.nn.functional as F
 
+from sprout.data.data_processing import TokenDataLoader
 from sprout.eval import Evaluator
 from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
 
@@ -78,7 +79,7 @@ class Trainer:
                 now = time.perf_counter()
                 token_per_sec = tokens_since_last_eval / (now - last_eval_time)
                 eval_loss, benchmark_results = self.evaluate()
-                self.logger.log(step, train_loss, eval_loss, self.config.get_lr(step), grad_norm.item(), token_per_sec, benchmark_results)
+                self.logger.log(step, train_loss, eval_loss, self.config.get_lr(step), grad_norm, token_per_sec, benchmark_results)
                 print(f"Step {step}: Train Loss = {train_loss:.4f}, Eval Loss = {eval_loss:.4f}, Tokens/sec = {token_per_sec:.2f}")
 
                 tokens_since_last_eval = 0

@@ -64,7 +64,7 @@ if __name__ == "__main__":
         tokenizer=FastBPETokenizer.load(config.tokenizer_path),
         config=config,
         prompt="""The water cycle describes how water moves through the environment. First,""",
-        max_new_tokens=100,
+        max_new_tokens=50,
         temperature=0.8,
         top_k=None,
         top_p=0.9,

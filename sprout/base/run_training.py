@@ -12,11 +12,11 @@ torch.set_float32_matmul_precision("high")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-checkpoint_path = None
+checkpoint_path = None # Path(__file__).parent.parent / "checkpoints" / "vanilla" / "checkpoint_step_2500.pt"
 
 config = Config(
-    micro_batch_size=24,
-    grad_accum_steps=42,
+    micro_batch_size=10,
+    grad_accum_steps=50,
     eval_interval=250,
     checkpoint_interval=500,
 )

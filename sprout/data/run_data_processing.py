@@ -9,13 +9,15 @@ from sprout.data.data_processing import DatasetProcessor
 num_tokens = 7_500_000_000
 shard_size = 100_000_000
 tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_state.json"
-metadata_path = "./metadata_mixed_7_5b.json"
-output_dir = "./shards/mixed_7_5b_shards"
-base_ds = load_dataset("HuggingFaceFW/fineweb-edu", split="train", streaming=True)
-code_ds = load_dataset("allenai/olmo-mix-1124", name="starcoder", split="train", streaming=True)
-math_ds = load_dataset("HuggingFaceTB/finemath", name="finemath-4plus", split="train", streaming=True)
+metadata_path = "./metadata_train_7_5b.json"
+output_dir = "./shards/train_shards_7_5b"
+base1_ds = load_dataset("HuggingFaceFW/fineweb-edu", split="train", streaming=True).select_columns(["text"])
+base2_ds = load_dataset("mlfoundations/dclm-baseline-1.0", split="train", streaming=True).select_columns(["text"])
+code_ds = load_dataset("allenai/olmo-mix-1124", name="starcoder", split="train", streaming=True).select_columns(["text"])
+math_ds = load_dataset("HuggingFaceTB/finemath", name="finemath-4plus", split="train", streaming=True).select_columns(["text"])
 dataset_mixture = {
-    base_ds: 0.85,
+    base1_ds: 0.45,
+    base2_ds: 0.40,
     code_ds: 0.1,
     math_ds: 0.05,
 }
