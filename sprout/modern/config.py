@@ -12,7 +12,7 @@ class Config:
     num_heads: int = 12
     num_kv_heads: int = 3
     num_layers: int = 12
-    max_seq_len: int = 512
+    max_seq_len: int = 1024
     vocab_size: int = 32768
     mlp_expansion: int = 4
     dropout: float = 0.0
@@ -20,7 +20,7 @@ class Config:
     # Optimizer hyperparameters
     muon_momentum: float = 0.95
     weight_decay: float = 0.1
-    max_learning_rate: float = 3e-4
+    max_learning_rate: float = 1e-3
     betas: tuple = (0.9, 0.95)
     eps: float = 1e-8
     # Training hyperparameters
@@ -39,9 +39,9 @@ class Config:
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
     # Directories
     save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "modern" / "untuned"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "mixed_7_5b_shards"
+    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "train_shards_2_5b"
     log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "modern_untuned_log.json"
-    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_state.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_state.json"
 
     def __post_init__(self):
         self.head_dim = self.d_model // self.num_heads

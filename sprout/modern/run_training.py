@@ -15,8 +15,8 @@ torch.backends.cudnn.allow_tf32 = True
 checkpoint_path = None
 
 config = Config(
-    micro_batch_size=24,
-    grad_accum_steps=42,
+    micro_batch_size=10,
+    grad_accum_steps=50,
     eval_interval=250,
     checkpoint_interval=500,
 )

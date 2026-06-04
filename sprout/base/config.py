@@ -16,7 +16,7 @@ class Config:
     dropout: float = 0.0
     # Optimizer hyperparameters
     weight_decay: float = 0.1
-    max_learning_rate: float = 3e-4
+    max_learning_rate: float = 6e-4
     betas: tuple = (0.9, 0.95)
     eps: float = 1e-8
     # Training hyperparameters
@@ -32,10 +32,10 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
     # Directories
-    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "vanilla"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "mixed_7_5b_shards"
-    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "vanilla_training_log.json"
-    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_state.json"
+    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "vanilla3"
+    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "train_shards_2_5b"
+    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "vanilla_training_log3.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_state.json"
 
     def __post_init__(self):
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len

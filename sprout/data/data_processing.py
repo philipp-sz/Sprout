@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import torch
 import numpy as np
 from tqdm import tqdm
-from datasets import IterableDataset, load_dataset, interleave_datasets
+from datasets import IterableDataset, interleave_datasets
 
 from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
 
@@ -186,6 +186,7 @@ class TokenDataLoader:
 
     def _load_next_shard(self) -> None:
         """Loads the next shard of token IDs into memory and resets the current position."""
+        self.shard_files = self._get_shard_files() # Refresh the list of shard files in case new shards have been added
         self.shard_idx = (self.shard_idx + 1) % len(self.shard_files) # Increment index and wrap around if end of shard list is reached
         self.shard_tokens = np.load(self.shard_files[self.shard_idx])
         self.cur_pos = 0
