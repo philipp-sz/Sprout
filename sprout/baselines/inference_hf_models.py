@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-def generate_text(prompt, max_new_tokens=50, temperature=0.8, top_k=None, top_p=0.9):
+def generate_text(prompt, max_new_tokens=50, temperature=0.8, top_k=None, top_p=0.95):
     model_name = "gpt2"
     
     print(f" Loading {model_name}... ")
@@ -30,7 +30,7 @@ def generate_text(prompt, max_new_tokens=50, temperature=0.8, top_k=None, top_p=
     return generated_text
 
 if __name__ == "__main__":
-    prompt_input = "The water cycle describes how water moves through the environment. First,"
+    prompt_input = "Newton's first law of motion states that an object at rest remains at rest, and an object in motion stays in motion at constant velocity, unless acted upon by"
     
     result = generate_text(prompt_input)
 

@@ -8,13 +8,13 @@ import torch
 @dataclass
 class Config:
     # Model hyperparameters
-    d_model: int = 768
-    num_heads: int = 12
-    num_kv_heads: int = 3
-    num_layers: int = 12
+    d_model: int = 1024
+    num_heads: int = 16
+    num_kv_heads: int = 4
+    num_layers: int = 8
     max_seq_len: int = 1024
     vocab_size: int = 32768
-    mlp_expansion: int = 4
+    mlp_expansion: int = 5
     dropout: float = 0.0
     rope_base_freq: float = 5_000.0
     # Optimizer hyperparameters
