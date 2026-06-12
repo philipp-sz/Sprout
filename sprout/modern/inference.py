@@ -62,7 +62,7 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
     return tokenizer.decode(generated_tokens)
 
 if __name__ == "__main__":
-    checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "untuned" / "model_final.pt"
+    checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling" / "checkpoint_step_19500.pt"
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     logging.getLogger("torch._inductor").setLevel(logging.ERROR) # Suppressmax_autotune_gemm mode warning
 
@@ -79,8 +79,9 @@ if __name__ == "__main__":
         tokenizer=FastBPETokenizer.load(config.tokenizer_path),
         config=config,
         prompt=r"""The water cycle describes how water moves through the environment. First,""",
-        max_new_tokens=50,
-        temperature=0.8,
-        top_k=None,
-        top_p=0.9,
+        max_new_tokens=100,
+        temperature=0.7,
+        top_k=40,
+        top_p=0.95,
+        repetition_penalty=1.15
     )

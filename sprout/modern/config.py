@@ -14,7 +14,7 @@ class Config:
     num_layers: int = 8
     max_seq_len: int = 1024
     vocab_size: int = 32768
-    mlp_expansion: int = 5
+    mlp_expansion: float = 4.75
     dropout: float = 0.0
     rope_base_freq: float = 5_000.0
     # Optimizer hyperparameters
@@ -24,7 +24,7 @@ class Config:
     betas: tuple = (0.9, 0.95)
     eps: float = 1e-8
     # Training hyperparameters
-    num_training_tokens: int = 2_500_000_000
+    num_training_tokens: int = 15_000_000_000
     micro_batch_size: int = 64
     grad_accum_steps: int = 16
     grad_clip: float = 1.0
@@ -38,9 +38,9 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32
     # Directories
-    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "modern" / "untuned"
-    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "train_shards_2_5b"
-    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "modern_untuned_log.json"
+    save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling"
+    shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "train_shards_15b"
+    log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "sapling_training_log.json"
     tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_state.json"
 
     def __post_init__(self):

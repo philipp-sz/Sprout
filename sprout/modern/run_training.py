@@ -12,7 +12,7 @@ torch.set_float32_matmul_precision("high")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-checkpoint_path = None # Path(__file__).parent.parent / "checkpoints" / "modern" / "untuned" / "checkpoint_step_4000.pt" # None
+checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling" / "checkpoint_step_19500.pt"
 
 config = Config(
     micro_batch_size=10,
@@ -24,7 +24,7 @@ train_loader = TokenDataLoader(config.shards_dir, config.micro_batch_size, confi
 val_loader = TokenDataLoader(config.shards_dir, config.micro_batch_size, config.max_seq_len, config.device, split="val")
 
 if checkpoint_path and checkpoint_path.exists():
-    trainer = Trainer.from_checkpoint(checkpoint_path, TransformerDecoder, Config, train_loader, val_loader)
+    trainer = Trainer.from_checkpoint(checkpoint_path, TransformerDecoder, config,train_loader, val_loader)
 else:
     model = TransformerDecoder(config).to(config.device)
     model = torch.compile(model)

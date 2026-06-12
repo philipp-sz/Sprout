@@ -18,7 +18,7 @@ class TrainingLogger:
         self.records = []
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def log(self, step: int, train_loss: float, eval_loss: float, lr: float, grad_norm: float, token_per_sec: float, benchmark_results: dict[str, float]):
+    def log(self, step: int, train_loss: float, eval_loss: float, lr: float, grad_norm: float, token_per_sec: float, benchmark_results: dict[str, float], time_since_start: float):
         if not self.records and os.path.exists(self.log_path):
             with open(self.log_path, "r") as f:
                 loaded_records = json.load(f)
@@ -33,7 +33,8 @@ class TrainingLogger:
             "lr": lr,
             "grad_norm": grad_norm,
             "token_per_sec": token_per_sec,
-            "benchmarks": benchmark_results
+            "benchmarks": benchmark_results,
+            "time_since_start": time_since_start
         })
         with open(self.log_path, "w") as f:
             json.dump(self.records, f, indent=2)
@@ -54,6 +55,7 @@ class Trainer:
         self.val_loader = val_loader
         self.config = config
         self.start_step = 1
+        self.start_time = time.perf_counter()
         self.logger = TrainingLogger(config.log_path)
         self.tokenizer = FastBPETokenizer.load(config.tokenizer_path)
         self.evaluator = Evaluator(model, self.tokenizer, device=config.device, prefix_token_id=self.tokenizer.eot_token)
@@ -78,8 +80,10 @@ class Trainer:
             if step % self.config.eval_interval == 0:
                 now = time.perf_counter()
                 token_per_sec = tokens_since_last_eval / (now - last_eval_time)
+                time_since_start = now - self.start_time
+
                 eval_loss, benchmark_results = self.evaluate()
-                self.logger.log(step, train_loss, eval_loss, self.config.get_lr(step), grad_norm, token_per_sec, benchmark_results)
+                self.logger.log(step, train_loss, eval_loss, self.config.get_lr(step), grad_norm, token_per_sec, benchmark_results, time_since_start)
                 print(f"Step {step}: Train Loss = {train_loss:.4f}, Eval Loss = {eval_loss:.4f}, Tokens/sec = {token_per_sec:.2f}")
 
                 tokens_since_last_eval = 0
@@ -141,17 +145,26 @@ class Trainer:
             "total_train_loss": total_train_loss,
             "total_eval_loss": total_eval_loss,
             "step_num": step_num,
+            "time_since_start": time.perf_counter() - self.start_time
         }
         checkpoint_path = self.config.save_dir / f"checkpoint_step_{step_num}.pt"
         self.config.save_dir.mkdir(parents=True, exist_ok=True)
         torch.save(state_dict, checkpoint_path)
 
     @classmethod
-    def from_checkpoint(cls, checkpoint_path: Path, model_class, config_class, train_loader, val_loader):
+    def from_checkpoint(cls, checkpoint_path: Path, model_class, config, train_loader, val_loader):
         """Creates a Trainer instance from a saved checkpoint, restoring model state, optimizer state, and training progress."""
-        checkpoint = torch.load(checkpoint_path)
-        config = config_class(**checkpoint["config"])
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        default_config = config.__class__()
+        new_overrides = {
+            k: v for k, v in config.to_dict().items()
+            if v != getattr(default_config, k)
+        } # Only override config values if explicitly set
+        merged_config_dict = {**checkpoint["config"], **new_overrides}
+        for k, v in merged_config_dict.items():
+            setattr(config, k, v)
         config.convert_paths() # Convert string paths back to Path objects
+
         model = model_class(config).to(config.device)
         model = torch.compile(model)
         model.load_state_dict(checkpoint["model"])
@@ -176,7 +189,13 @@ class Trainer:
         val_loader.set_state = checkpoint["val_loader_state"]
         trainer = cls(model, train_loader, val_loader, config, optimizers)
         trainer.start_step = checkpoint["step_num"] + 1
-        print(f"Resumed training from checkpoint at step {checkpoint['step_num']}.")
+        trainer.start_time = time.perf_counter() - checkpoint.get("time_since_start", 0)
+
+        step_num = checkpoint["step_num"]
+        del checkpoint
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print(f"Resumed training from checkpoint at step {step_num}.")
         return trainer
 
     def _print_summary(self):
