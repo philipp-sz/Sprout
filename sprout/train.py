@@ -7,9 +7,8 @@ from tqdm import trange
 import torch
 import torch.nn.functional as F
 
-from sprout.data.data_processing import TokenDataLoader
 from sprout.eval import Evaluator
-from sprout.tokenizer.fast_bpe_tokenizer import FastBPETokenizer
+from sprout.tokenizer import FastBPETokenizer
 
 
 class TrainingLogger:

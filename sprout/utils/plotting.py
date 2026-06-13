@@ -52,6 +52,19 @@ _C = {
     "average":       "#e5e5e5",
 }
 
+_MODEL_PALETTE = [
+    "#4a9eff", "#ff6b6b", "#34d399", "#a78bfa",
+    "#f59e0b", "#f472b6", "#60a5fa", "#a3e635",
+]
+
+_BENCH_DISPLAY = {
+    "lambada":       "LAMBADA",
+    "arc_easy":      "ARC-Easy",
+    "arc_challenge": "ARC-Challenge",
+    "hellaswag":     "HellaSwag",
+    "average":       "Average",
+}
+
 _BENCH_KEYS = ["lambada", "arc_easy", "arc_challenge", "hellaswag"]
 
 
@@ -241,6 +254,94 @@ def plot_all(log_path: str | Path, eval_results_path: Optional[str | Path] = Non
     plot_throughput(log, alpha=0.12, out_path=_out("throughput.png"))
     plot_benchmarks(log, eval_results, alpha=smooth_alpha, out_path=_out("benchmarks.png"))
 
+def plot_model_comparison(results: dict[str, str | Path], out_path: Optional[str | Path] = None) -> plt.Figure:
+    """Plot a vertical bar chart comparing final benchmark accuracies across multiple models."""
+    if not results:
+        raise ValueError("results dict is empty — nothing to plot.")
+
+    model_names = list(results.keys())
+    n_models = len(model_names)
+
+    # Load and validate
+    data: dict[str, dict[str, float]] = {}
+    for label, path in results.items():
+        raw = load_eval_results(path)
+        # Normalise key names: accept both "hellaswag_acc" and "hellaswag"
+        normalised: dict[str, float] = {}
+        for key in _BENCH_KEYS:
+            for candidate in (f"{key}_acc", key):
+                if candidate in raw:
+                    normalised[key] = raw[candidate]
+                    break
+        if "average_acc" in raw:
+            normalised["average"] = raw["average_acc"]
+        elif "average" in raw:
+            normalised["average"] = raw["average"]
+        else:
+            present = [v for v in normalised.values()]
+            normalised["average"] = float(np.mean(present)) if present else float("nan")
+        data[label] = normalised
+
+    # Benchmark order: individual first, average last (displayed left-to-right)
+    bench_order = _BENCH_KEYS + ["average"]
+    bench_labels = [_BENCH_DISPLAY[b] for b in bench_order]
+    n_benches = len(bench_order)
+
+    bar_w      = 0.65 / n_models   # bar width shrinks as models are added
+    cluster_w  = 1.0               # spacing between benchmark clusters
+    colors     = _MODEL_PALETTE[:n_models]
+
+    # Adjust width dynamically based on the number of benchmarks and models
+    fig_width = max(9, 1.2 * n_benches + 0.6 * n_models)
+
+    with plt.rc_context(_STYLE):
+        fig, ax = plt.subplots(figsize=(fig_width, 6))
+
+        # Centre positions for each benchmark cluster
+        cluster_centres = np.arange(n_benches) * cluster_w
+
+        for m_idx, (label, model_data) in enumerate(data.items()):
+            # Offset each model's bars within the cluster
+            offset = (m_idx - (n_models - 1) / 2) * bar_w
+            x_positions = cluster_centres + offset
+            values = [model_data.get(b, float("nan")) for b in bench_order]
+
+            bars = ax.bar(
+                x_positions, values,
+                width=bar_w * 0.88,
+                color=colors[m_idx],
+                alpha=0.85,
+                label=label,
+            )
+
+            # Value annotations
+            for bar, val in zip(bars, values):
+                if not np.isnan(val):
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        val + 0.005,
+                        f"{val * 100:.1f}%",
+                        va="bottom", ha="center",
+                        fontsize=7.5,
+                        color="#aaaaaa",
+                    )
+
+        # Draw a subtle vertical separator to the left of the Average column
+        sep_x = (cluster_centres[-1] + cluster_centres[-2]) / 2
+        ax.axvline(sep_x, color="#333333", lw=0.8, ls="--")
+
+        ax.set_xticks(cluster_centres)
+        ax.set_xticklabels(bench_labels, fontsize=10, rotation=45, ha="right")
+        ax.set_ylabel("Accuracy")
+        ax.set_title("Model Comparison — Benchmark Accuracy")
+        ax.set_ylim(0, min(1.0, ax.get_ylim()[1] + 0.06))
+        ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: f"{y * 100:.0f}%"))
+        ax.legend(loc="upper right", framealpha=0.8)
+        ax.grid(True, axis="y")
+        fig.tight_layout()
+
+    _save(fig, out_path)
+    return fig
 
 if __name__ == "__main__":
     plot_all(
@@ -248,4 +349,12 @@ if __name__ == "__main__":
         eval_results_path=Path(__file__).parent.parent / "logs" / "eval" / "modern_untuned_eval_results.json",
         out_dir=Path(__file__).parent.parent / "logs" / "plots" / "sapling",
         smooth_alpha=0.30
+    )
+    plot_model_comparison(
+        results={
+            "GPT-2 Small": Path(__file__).parent.parent / "logs" / "eval" / "gpt2_eval_results.json",
+            "Sprout Vanilla": Path(__file__).parent.parent / "logs" / "eval" / "vanilla3_eval_results.json",
+            "Sprout Modern (untuned)": Path(__file__).parent.parent / "logs" / "eval" / "modern_untuned_eval_results.json",
+        },
+        out_path=Path(__file__).parent.parent / "logs" / "plots" / "model_comparison.png",
     )
