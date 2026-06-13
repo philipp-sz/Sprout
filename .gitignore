@@ -32,5 +32,6 @@ training_data_mixed.txt
 tokenizer_data_mixed_20k.txt
 tokenizer_data_mixed_20k_v4.txt
 *.json
+*.png
 checkpoints/
 logs/

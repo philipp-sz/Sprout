@@ -62,7 +62,7 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
     return tokenizer.decode(generated_tokens)
 
 if __name__ == "__main__":
-    checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling" / "checkpoint_step_19500.pt"
+    checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling" / "checkpoint_step_22000.pt"
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     logging.getLogger("torch._inductor").setLevel(logging.ERROR) # Suppressmax_autotune_gemm mode warning
 
