@@ -25,6 +25,7 @@ Thumbs.db
 
 # Data
 shards/
+metadata/
 *.npy
 metadata.json
 training_data.txt

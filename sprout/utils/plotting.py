@@ -343,6 +343,84 @@ def plot_model_comparison(results: dict[str, str | Path], out_path: Optional[str
     _save(fig, out_path)
     return fig
 
+def plot_sft_filter_stats(df: "pd.DataFrame", out_path: Optional[str | Path] = None) -> plt.Figure:
+    """Stacked horizontal bar chart showing sample counts per source, split into kept vs. filtered samples."""
+    counts = (
+        df.groupby(["source", "filtered"])
+        .size()
+        .unstack(fill_value=0)
+        .rename(columns={False: "kept", True: "filtered_out"})
+    )
+    # Ensure both columns exist even if filtering removed nothing / everything
+    for col in ("kept", "filtered_out"):
+        if col not in counts.columns:
+            counts[col] = 0
+
+    # Sort sources by total descending so the longest bar is at the top
+    counts["total"] = counts["kept"] + counts["filtered_out"]
+    counts = counts.sort_values("total", ascending=True)
+
+    sources    = counts.index.tolist()
+    kept       = counts["kept"].values
+    filtered   = counts["filtered_out"].values
+    totals     = counts["total"].values
+    n          = len(sources)
+
+    bar_h     = 0.65  
+    fig_h     = max(4, 0.7 * n + 1.2)
+
+    _C_KEPT     = "#34d399"
+    _C_FILTERED = "#ff6b6b"
+
+    with plt.rc_context(_STYLE):
+        fig, ax = plt.subplots(figsize=(11, fig_h))
+
+        y = np.arange(n)
+
+        ax.set_axisbelow(True)
+        ax.grid(True, axis="x", color="#333333", linestyle=":", alpha=0.6)
+
+        # Stacked: kept first (left), filtered on top (right)
+        ax.barh(y, kept,     height=bar_h, color=_C_KEPT,     alpha=0.9, label="Kept")
+        ax.barh(y, filtered, height=bar_h, color=_C_FILTERED, alpha=0.9,
+                left=kept, label="Filtered out")
+
+        max_total = totals.max()
+        text_threshold = 0.05 * max_total
+
+        for i, (k, f, t) in enumerate(zip(kept, filtered, totals)):
+            # Kept count inside the kept bar (only if wide enough)
+            if k > text_threshold:
+                ax.text(k / 2, i, f"{k:,}",
+                        va="center", ha="center", fontsize=9, color="#111111", fontweight="bold")
+            
+            if f > text_threshold:
+                ax.text(k + f / 2, i, f"{f:,}",
+                        va="center", ha="center", fontsize=9, color="#111111", fontweight="bold")
+            
+            pct = 100 * k / t if t > 0 else 0.0
+            ax.text(t + max_total * 0.015, i, f"{t:,}  ({pct:.1f}% kept)",
+                    va="center", ha="left", fontsize=9, color="#cccccc")
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(sources, fontsize=10)
+        ax.set_xlabel("Number of samples", fontsize=10, labelpad=8)
+        ax.set_title("SFT Dataset — Samples per Source (before / after length filter)", fontsize=12, pad=16, fontweight="bold")
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+        
+        for spine in ["top", "right", "left"]:
+            ax.spines[spine].set_visible(False)
+        
+        # Adjust right margin dynamically to guarantee no text clipping
+        ax.set_xlim(0, max_total * 1.32)
+        
+        # Subtle legend background blending
+        ax.legend(loc="lower right", framealpha=0.2, edgecolor="none")
+        fig.tight_layout()
+
+    _save(fig, out_path)
+    return fig
+
 if __name__ == "__main__":
     plot_all(
         log_path=Path(__file__).parent.parent / "logs" / "train" / "sapling_training_log.json",

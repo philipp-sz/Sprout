@@ -29,3 +29,16 @@ def resize_model_embeddings(old_embeddings: torch.nn.Embedding, num_new_tokens: 
         mean_weight = old_embeddings.weight.mean(dim=0, keepdim=True)
         new_embeddings.weight[old_num_tokens:] = mean_weight.repeat(num_new_tokens, 1)
     return new_embeddings
+
+def chat_ml_formatter(messages: list[dict[str, str]]) -> str:
+    """Formats text in the ChatML format for instruction tuning."""
+    formatted_messages = ""
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        formatted_messages += f"<|im_start|>{role}\n{content}<|im_end|>\n"       
+    return formatted_messages
+
+def token_length_filter(tokenized_doc: list[int], max_length: int = 1024) -> bool:
+    """Filters out tokenized documents that exceed the maximum token length."""
+    return len(tokenized_doc) <= max_length
