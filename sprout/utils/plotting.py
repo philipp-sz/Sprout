@@ -292,7 +292,7 @@ def plot_model_comparison(results: dict[str, str | Path], out_path: Optional[str
     colors     = _MODEL_PALETTE[:n_models]
 
     # Adjust width dynamically based on the number of benchmarks and models
-    fig_width = max(9, 1.2 * n_benches + 0.6 * n_models)
+    fig_width = max(9, 1.25 * n_benches + 0.7 * n_models)
 
     with plt.rc_context(_STYLE):
         fig, ax = plt.subplots(figsize=(fig_width, 6))
@@ -319,11 +319,12 @@ def plot_model_comparison(results: dict[str, str | Path], out_path: Optional[str
                 if not np.isnan(val):
                     ax.text(
                         bar.get_x() + bar.get_width() / 2,
-                        val + 0.005,
+                        val + 0.008, 
                         f"{val * 100:.1f}%",
                         va="bottom", ha="center",
                         fontsize=7.5,
-                        color="#aaaaaa",
+                        color="#e0e0e0",  # Brighter off-white for cleaner dark-theme contrast
+                        rotation=60,
                     )
 
         # Draw a subtle vertical separator to the left of the Average column
@@ -334,7 +335,9 @@ def plot_model_comparison(results: dict[str, str | Path], out_path: Optional[str
         ax.set_xticklabels(bench_labels, fontsize=10, rotation=45, ha="right")
         ax.set_ylabel("Accuracy")
         ax.set_title("Model Comparison — Benchmark Accuracy")
-        ax.set_ylim(0, min(1.0, ax.get_ylim()[1] + 0.06))
+        
+        ax.set_ylim(0, min(1.0, ax.get_ylim()[1] + 0.12))
+        
         ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: f"{y * 100:.0f}%"))
         ax.legend(loc="upper right", framealpha=0.8)
         ax.grid(True, axis="y")
@@ -424,7 +427,7 @@ def plot_sft_filter_stats(df: "pd.DataFrame", out_path: Optional[str | Path] = N
 if __name__ == "__main__":
     plot_all(
         log_path=Path(__file__).parent.parent / "logs" / "train" / "sapling_training_log.json",
-        eval_results_path=Path(__file__).parent.parent / "logs" / "eval" / "modern_untuned_eval_results.json",
+        eval_results_path=Path(__file__).parent.parent / "logs" / "eval" / "modern_sapling_eval_results.json",
         out_dir=Path(__file__).parent.parent / "logs" / "plots" / "sapling",
         smooth_alpha=0.30
     )
@@ -433,6 +436,7 @@ if __name__ == "__main__":
             "GPT-2 Small": Path(__file__).parent.parent / "logs" / "eval" / "gpt2_eval_results.json",
             "Sprout Vanilla": Path(__file__).parent.parent / "logs" / "eval" / "vanilla3_eval_results.json",
             "Sprout Modern (untuned)": Path(__file__).parent.parent / "logs" / "eval" / "modern_untuned_eval_results.json",
+            "Sprout Modern (sapling)": Path(__file__).parent.parent / "logs" / "eval" / "modern_sapling_eval_results.json",
         },
         out_path=Path(__file__).parent.parent / "logs" / "plots" / "model_comparison.png",
     )

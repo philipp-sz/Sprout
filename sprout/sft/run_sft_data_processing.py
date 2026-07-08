@@ -3,7 +3,7 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-from sprout.data.data_processing import DatasetProcessor
+from sprout.sft import SFTDatasetProcessor
 from sprout.utils import chat_ml_formatter, token_length_filter
 
 
@@ -15,7 +15,7 @@ output_dir = Path(__file__).parent.parent / "data"/ "shards" / "sft_shards_5M"
 sft_ds = load_dataset("HuggingFaceTB/smol-smoltalk", split="train", streaming=True).select_columns(["messages"])
 dataset_mixture = {sft_ds: 1.0}
 
-processor = DatasetProcessor(
+processor = SFTDatasetProcessor(
     dataset_mixture=dataset_mixture,
     metadata_path=metadata_path,
     output_dir=output_dir,
@@ -24,7 +24,6 @@ processor = DatasetProcessor(
     imap_chunksize=100, # Number of documents to process with each imap call
     shard_size=shard_size,
     num_tokens=num_tokens,
-    text_formatter=chat_ml_formatter,
     token_filter=token_length_filter,
     text_key="messages"
 )
