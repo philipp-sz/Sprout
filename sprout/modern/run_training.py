@@ -24,7 +24,7 @@ train_loader = TokenDataLoader(config.shards_dir, config.micro_batch_size, confi
 val_loader = TokenDataLoader(config.shards_dir, config.micro_batch_size, config.max_seq_len, config.device, split="val")
 
 if checkpoint_path and checkpoint_path.exists():
-    trainer = Trainer.from_checkpoint(checkpoint_path, TransformerDecoder, config,train_loader, val_loader)
+    trainer = Trainer.from_checkpoint(checkpoint_path, TransformerDecoder, config, train_loader, val_loader)
 else:
     model = TransformerDecoder(config).to(config.device)
     model = torch.compile(model)

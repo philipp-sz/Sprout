@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from sprout.eval import Evaluator
+from sprout.modern.config import Config
 from sprout.tokenizer import FastBPETokenizer
 
 
@@ -48,6 +49,11 @@ class Trainer:
         optimizer: The optimizer to use for training.
         config: Configuration object containing hyperparameters and settings.
     """
+    _ARCHITECTURE_FIELDS = {
+        "d_model", "num_heads", "num_kv_heads", "num_layers",
+        "max_seq_len", "vocab_size", "mlp_expansion", "rope_base_freq",
+    }
+
     def __init__(self, model, train_loader, val_loader, config, optimizers: tuple | list | None = None):
         self.model = model
         self.train_loader = train_loader
@@ -118,7 +124,7 @@ class Trainer:
             x, y = self.train_loader.get_batch()
             with torch.autocast(device_type=self.config.device, dtype=self.config.dtype):
                 logits = self.model(x)
-                loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), y.view(-1))
+                loss = F.cross_entropy(logits.view(-1, self.config.vocab_size), y.view(-1), ignore_index=-100)
                 loss = loss / self.config.grad_accum_steps
             loss.backward()
             train_loss += loss.item() # Keep scaled down so it reflects the average loss per micro batch
@@ -151,17 +157,12 @@ class Trainer:
         torch.save(state_dict, checkpoint_path)
 
     @classmethod
-    def from_checkpoint(cls, checkpoint_path: Path, model_class, config, train_loader, val_loader):
+    def from_checkpoint(cls, checkpoint_path: Path, model_class, config, train_loader, val_loader, is_final: bool = False):
         """Creates a Trainer instance from a saved checkpoint, restoring model state, optimizer state, and training progress."""
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        default_config = config.__class__()
-        new_overrides = {
-            k: v for k, v in config.to_dict().items()
-            if v != getattr(default_config, k)
-        } # Only override config values if explicitly set
-        merged_config_dict = {**checkpoint["config"], **new_overrides}
-        for k, v in merged_config_dict.items():
-            setattr(config, k, v)
+        for field in cls._ARCHITECTURE_FIELDS:
+            setattr(config, field, checkpoint["config"][field])
+        config.__post_init__()
         config.convert_paths() # Convert string paths back to Path objects
 
         model = model_class(config).to(config.device)
@@ -174,27 +175,31 @@ class Trainer:
         else:
             optimizers = [raw_optims]
 
-        # Backward compatibility for old checkpoints
-        if "optimizers_states" in checkpoint:
-            for optim, optim_state in zip(optimizers, checkpoint["optimizers_states"]):
-                optim.load_state_dict(optim_state)
-        else:
-            if "adamw_optimizer" in checkpoint and len(optimizers) >= 1:
-                optimizers[0].load_state_dict(checkpoint["adamw_optimizer"])
-            if "muon_optimizer" in checkpoint and len(optimizers) >= 2:
-                optimizers[1].load_state_dict(checkpoint["muon_optimizer"])
+        if not is_final:
+            if "optimizers_states" in checkpoint:
+                for optim, optim_state in zip(optimizers, checkpoint["optimizers_states"]):
+                    optim.load_state_dict(optim_state)
+            else: # Backward compatibility for old checkpoints
+                if "adamw_optimizer" in checkpoint and len(optimizers) >= 1:
+                    optimizers[0].load_state_dict(checkpoint["adamw_optimizer"])
+                if "muon_optimizer" in checkpoint and len(optimizers) >= 2:
+                    optimizers[1].load_state_dict(checkpoint["muon_optimizer"])
 
-        train_loader.set_state = checkpoint["train_loader_state"]
-        val_loader.set_state = checkpoint["val_loader_state"]
+            train_loader.set_state = checkpoint["train_loader_state"]
+            val_loader.set_state = checkpoint["val_loader_state"]
         trainer = cls(model, train_loader, val_loader, config, optimizers)
-        trainer.start_step = checkpoint["step_num"] + 1
-        trainer.start_time = time.perf_counter() - checkpoint.get("time_since_start", 0)
+        if not is_final:
+            trainer.start_step = checkpoint["step_num"] + 1
+            trainer.start_time = time.perf_counter() - checkpoint.get("time_since_start", 0)
+            print(f"Resumed training from checkpoint at step {checkpoint['step_num']}.")
+        else:
+            trainer.start_step = 1
+            trainer.start_time = time.perf_counter()
+            print(f"Initialized Trainer from final model checkpoint. Starting new training run from step 1.")
 
-        step_num = checkpoint["step_num"]
         del checkpoint
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        print(f"Resumed training from checkpoint at step {step_num}.")
         return trainer
 
     def _print_summary(self):

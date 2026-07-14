@@ -22,9 +22,13 @@ class KVCache:
     def update(self, layer_idx: int, k_new: torch.Tensor, v_new: torch.Tensor, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Updates the cache with new keys and values for the current decoding step."""
         next_pos = self.cur_step + seq_len
-        if next_pos > self.max_seq_len:
+        if layer_idx == 0 and next_pos > self.max_seq_len:
             warnings.warn("KV Cache overflow: maximum sequence length exceeded. Oldest token will be dropped. Will cause inefficiency.")
-            self._shift_cache()
+            shift_amt = (self.cur_step + seq_len) - self.max_seq_len
+            self.k_cache[:, :, :, :-shift_amt, :] = self.k_cache[:, :, :, shift_amt:, :].clone()
+            self.v_cache[:, :, :, :-shift_amt, :] = self.v_cache[:, :, :, shift_amt:, :].clone()
+            self.cur_step -= shift_amt
+            next_pos = self.cur_step + seq_len
 
         self.k_cache[layer_idx, :, :, self.cur_step:next_pos, :] = k_new
         self.v_cache[layer_idx, :, :, self.cur_step:next_pos, :] = v_new
@@ -37,15 +41,6 @@ class KVCache:
     def current_step(self) -> int:
         """Returns the current decoding step, which indicates how many tokens are currently in the cache."""
         return self.cur_step
-
-    def _shift_cache(self):
-        """Shifts the cache to the left by one token to make room for new tokens when max sequence length is exceeded."""
-        padding_shape = (0, 0, 0, 1, 0)
-        shifted_k = self.k_cache[:, :, :, 1:, :]
-        shifted_v = self.v_cache[:, :, :, 1:, :]
-        self.k_cache = torch.pad(shifted_k, padding_shape, value=0.0)
-        self.v_cache = torch.pad(shifted_v, padding_shape, value=0.0)
-        self.cur_step -= 1
 
 class RotaryEmbedding(nn.Module):
     """Rotary Positional Embedding (RoPE) module."""

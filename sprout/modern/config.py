@@ -21,6 +21,7 @@ class Config:
     muon_momentum: float = 0.95
     weight_decay: float = 0.1
     max_learning_rate: float = 1e-3
+    min_learning_rate: float = 0.0
     betas: tuple = (0.9, 0.95)
     eps: float = 1e-8
     # Training hyperparameters
@@ -72,7 +73,7 @@ class Config:
             return self.max_learning_rate * (step + 1) / self.warmup_steps
 
         if step >= self.max_iterations: # Ensure learning rate does not cause divergence after max iterations
-            return 0.0        
+            return self.min_learning_rate       
 
         if step >= self.decay_steps:
             progress = (step - self.decay_steps) / (self.max_iterations - self.decay_steps)

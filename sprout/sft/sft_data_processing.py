@@ -67,7 +67,8 @@ class SFTDataLoader(TokenDataLoader):
         x = token_batch[:, :-1].to(self.device)
         y = token_batch[:, 1:].to(self.device)
         mask = mask_batch[:, 1:].to(self.device)
-        return x, y, mask
+        y = y.masked_fill(mask == 0, -100)
+        return x, y
     
     def _build_row(self, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
         if self.shard_tokens is None:

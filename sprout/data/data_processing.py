@@ -173,12 +173,13 @@ class TokenDataLoader:
     device (str): The device to load the batches onto ("cpu" or "cuda").
     split (str): The dataset split to load ("train", "val")
     """
-    def __init__(self, shards_dir: str, batch_size: int, seq_len: int, device: str, split: str = "train") -> None:
+    def __init__(self, shards_dir: str, batch_size: int, seq_len: int, device: str, split: str = "train", shard_extension: str = "npy") -> None:
         self.shards_dir = shards_dir
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.device = device
         self.split = split
+        self.shard_extension = shard_extension
         self.shard_idx = -1 # No shard loaded yet
         self.cur_pos = 0
         self.shard_tokens = None # Initialize the current shard tokens
@@ -199,7 +200,7 @@ class TokenDataLoader:
 
     def _get_shard_files(self) -> list[Path]:
         """Retrieves and sorts the list of shard files for the specified split."""
-        shard_files = sorted(Path(self.shards_dir).glob("shard_*.npy"))
+        shard_files = sorted(Path(self.shards_dir).glob(f"shard_*.{self.shard_extension}"))
         if self.split == "val":
             shard_files = shard_files[:1]
         elif self.split == "train":
