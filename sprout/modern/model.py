@@ -22,20 +22,24 @@ class KVCache:
     def update(self, layer_idx: int, k_new: torch.Tensor, v_new: torch.Tensor, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Updates the cache with new keys and values for the current decoding step."""
         next_pos = self.cur_step + seq_len
-        if layer_idx == 0 and next_pos > self.max_seq_len:
-            warnings.warn("KV Cache overflow: maximum sequence length exceeded. Oldest token will be dropped. Will cause inefficiency.")
-            shift_amt = (self.cur_step + seq_len) - self.max_seq_len
+        shift_amt = max(0, next_pos - self.max_seq_len)
+        if shift_amt > 0:
+            if layer_idx == 0: 
+                warnings.warn("KV Cache overflow: maximum sequence length exceeded. Oldest token will be dropped. Will cause inefficiency.")
             self.k_cache[:, :, :, :-shift_amt, :] = self.k_cache[:, :, :, shift_amt:, :].clone()
             self.v_cache[:, :, :, :-shift_amt, :] = self.v_cache[:, :, :, shift_amt:, :].clone()
-            self.cur_step -= shift_amt
-            next_pos = self.cur_step + seq_len
+            start_idx = self.cur_step - shift_amt
+            end_idx = start_idx + seq_len
+        else:
+            start_idx = self.cur_step
+            end_idx = next_pos
 
-        self.k_cache[layer_idx, :, :, self.cur_step:next_pos, :] = k_new
-        self.v_cache[layer_idx, :, :, self.cur_step:next_pos, :] = v_new
+        self.k_cache[layer_idx, :, :, start_idx:end_idx, :] = k_new
+        self.v_cache[layer_idx, :, :, start_idx:end_idx, :] = v_new
         if layer_idx == self.k_cache.size(0) - 1: # Only update once per forward pass
-            self.cur_step += seq_len
+            self.cur_step = end_idx
 
-        return self.k_cache[layer_idx, :, :, :next_pos, :], self.v_cache[layer_idx, :, :, :next_pos, :]
+        return self.k_cache[layer_idx, :, :, :end_idx, :], self.v_cache[layer_idx, :, :, :end_idx, :]
 
     @property
     def current_step(self) -> int:
@@ -127,14 +131,31 @@ class MultiHeadAttention(nn.Module):
         if kv_cache is not None:
             k, v = kv_cache.update(layer_idx=layer_idx, k_new=k, v_new=v, seq_len=T)
 
-        try:
-            with sdpa_kernel(SDPBackend.FLASH_ATTENTION): # Enfore Flash Attention, not the fallback
-                is_causal = (kv_cache is None) # causal during prefill, not during decode
-                attn_output = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, enable_gqa=True, dropout_p=self.dropout if self.training else 0.0)
-        except RuntimeError: # Fallback to manual attention if Flash Attention is not available
-            warnings.warn("Flash Attention not available, falling back to manual attention implementation.")
-            attn_output = self._calc_manual_attention(q, k, v, C, T)
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, C) # Reshape back to input shape
+        attn_mask = None
+        is_causal = False
+        if T > 1:
+            T_kv = k.size(-2)
+
+            if T_kv == T:
+                is_causal = True
+            else:
+                q_idx = torch.arange(T, device=q.device).unsqueeze(1)
+                kv_idx = torch.arange(T_kv, device=k.device).unsqueeze(0)
+                mask_bool = kv_idx <= (T_kv - T + q_idx)
+
+                mask_value = -10000.0 if q.dtype in [torch.float16, torch.bfloat16] else float("-inf")
+                attn_mask = torch.zeros(T, T_kv, device=q.device, dtype=q.dtype)
+                attn_mask = attn_mask.masked_fill(~mask_bool, mask_value)
+
+        attn_output = F.scaled_dot_product_attention(
+                q, k, v, 
+                attn_mask=attn_mask,
+                is_causal=is_causal,
+                enable_gqa=True, 
+                dropout_p=self.dropout if self.training else 0.0
+            )
+
+        attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, C) 
         return self.out_proj(attn_output)
     
     def _calc_manual_attention(self, q: Tensor, k: Tensor, v: Tensor, C: int, T: int) -> Tensor:
