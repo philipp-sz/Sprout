@@ -1,6 +1,6 @@
 # Project: Sprout
 
-A language model built from scratch — tokenizer, architecture, training loop, and SFT pipeline — trained entirely on a single consumer GPU (RTX 4070, 12GB VRAM).
+A language model built from scratch — tokenizer, architecture, training loop, and SFT pipeline — trained entirely on a single consumer GPU (RTX 4070, 12GB VRAM) that is better than GPT-2-small. The 15B-token Sapling pretraining run alone took roughly 87 hours.
 
 ## Why
 
@@ -20,7 +20,7 @@ The project moved through three stages, each answering a different question. All
 
 ## Results
 
-![Benchmark comparison](sprout/logs/plots/model_comparison.png)
+![Benchmark comparison](assets/model_comparison.png)
 
 Sapling reaches a 33.5% average across LAMBADA, ARC-Easy, ARC-Challenge, and HellaSwag — ahead of GPT-2 Small (30.8%) at a comparable parameter count, and a clear step up over both the vanilla baseline (27.4%) and the untuned modern model (30.2%). The gap between vanilla and modern-untuned shows what the architecture swap alone bought; the gap between modern-untuned and Sapling shows what additional scale and tuning bought on top of that.
 
@@ -28,13 +28,13 @@ Sapling reaches a 33.5% average across LAMBADA, ARC-Easy, ARC-Challenge, and Hel
 
 Conventional wisdom (MobileLLM, SmolLM2) says deeper-and-narrower wins for small language models — but usually that result shows up late in training, after a lot of tokens. Compute-constrained to a single GPU, I cared more about tokens-per-wall-clock-hour than the theoretical optimum, so I ran a short ablation before committing to Sapling's final shape:
 
-![Architecture ablation](sprout/logs/plots/architecture_ablation.png)
+![Architecture ablation](assets/architecture_ablation.png)
 
 Three architectures — wide (8 layers, d=1024), medium (16 layers, d=768), and deep (30 layers, d=576, close to SmolLM2's own shape) — trained for a fixed ~1000 steps. At equal wall-clock time, wide was consistently ahead on benchmark accuracy, and the token-budget panel shows why: in any fixed training window, the wide model simply gets through more data — roughly 3–4B more tokens than deep in the same 24–72 hours. Given the deep model's theoretical advantage mostly pays off over very long horizons I can't afford locally, I took the throughput win and went wide for Sapling. It's an acknowledged tradeoff, not a free lunch — the ablation itself is a bit informal (batch sizes weren't matched across runs), but it was directionally decisive enough to commit to.
 
 ### Training dynamics
 
-![Sapling training and eval loss](sprout/logs/plots/sapling/loss.png)
+![Sapling training and eval loss](assets/loss.png)
 
 Loss curves for the full 15B-token Sapling pretraining run.
 
@@ -42,7 +42,7 @@ Loss curves for the full 15B-token Sapling pretraining run.
 
 After SFT, Sapling holds a short multi-turn conversation, follows instructions, and stays roughly on-topic — a genuinely useful sanity check for a 134M-parameter model trained on one GPU:
 
-![Demo conversation with Sapling](sprout/logs/plots/demo_conversation.png)
+![Demo conversation with Sapling](assets/demo_conversation.png)
 
 ## Architecture
 
@@ -77,10 +77,6 @@ After SFT, Sapling holds a short multi-turn conversation, follows instructions, 
 3. **Pretraining** — custom training loop: BF16 mixed precision, `torch.compile`, FlashAttention 2, gradient clipping, WSD learning rate schedule, Muon for 2D weight matrices with AdamW for embeddings/head/norms.
 4. **Evaluation** — HellaSwag, ARC-Easy, ARC-Challenge, LAMBADA via log-likelihood scoring.
 5. **SFT** — ChatML-formatted conversational fine-tuning with role-conditional loss masking and conversation-respecting sequence packing.
-
-## Hardware & Scale
-
-Every training run was done on a single RTX 4070 (12GB VRAM). The 15B-token Sapling pretraining run alone took roughly 87 hours. 
 
 ---
 
