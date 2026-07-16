@@ -70,6 +70,10 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: SFT
         _ = model(missing_token_tensor, kv_cache=kv_cache)
 
 if __name__ == "__main__":
+    torch.set_float32_matmul_precision("high")
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "sft" / "sft_200M" / "model_final.pt"
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     logging.getLogger("torch._inductor").setLevel(logging.ERROR) # Suppressmax_autotune_gemm mode warning

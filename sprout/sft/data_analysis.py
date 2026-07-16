@@ -47,7 +47,7 @@ def analyze_dataset(dataset_mixture: dict[IterableDataset, float], tokenizer_sta
 if __name__ == "__main__":
     max_samples = 50_000
     plot_path = Path(__file__).parent / "plots" / "sft_data_analysis.png"
-    tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "states" / "bpe_mixed_32k_20k_instruct_state.json"
+    tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_instruct_state.json"
     sft_ds = load_dataset("HuggingFaceTB/smol-smoltalk", split="train", streaming=True)
     dataset_mixture = {sft_ds: 1.0}
     df = analyze_dataset(

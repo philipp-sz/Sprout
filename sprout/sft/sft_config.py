@@ -22,7 +22,7 @@ class SFTConfig(Config):
     save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "sft" / "sft_200M"
     shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "sft_shards_200M"
     log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "sft_200M_log.json"
-    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "states" / "bpe_mixed_32k_20k_instruct_state.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_instruct_state.json"
 
     def get_lr(self, step: int) -> float:
         if step < self.warmup_steps:

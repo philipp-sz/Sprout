@@ -35,7 +35,7 @@ class Config:
     save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "vanilla"
     shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "train_shards_2_5b"
     log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "vanilla_training_log.json"
-    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "states" / "bpe_mixed_32k_20k_state.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_state.json"
 
     def __post_init__(self):
         self.effective_batch_size = self.micro_batch_size * self.grad_accum_steps * self.max_seq_len
