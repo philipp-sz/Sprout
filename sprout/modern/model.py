@@ -3,7 +3,6 @@ import warnings
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.optim import AdamW, Muon
 
 from sprout.modern.config import Config

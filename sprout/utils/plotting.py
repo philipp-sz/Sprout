@@ -434,7 +434,7 @@ if __name__ == "__main__":
     plot_model_comparison(
         results={
             "GPT-2 Small": Path(__file__).parent.parent / "logs" / "eval" / "gpt2_eval_results.json",
-            "Sprout Vanilla": Path(__file__).parent.parent / "logs" / "eval" / "vanilla3_eval_results.json",
+            "Sprout Vanilla": Path(__file__).parent.parent / "logs" / "eval" / "vanilla_eval_results.json",
             "Sprout Modern (untuned)": Path(__file__).parent.parent / "logs" / "eval" / "modern_untuned_eval_results.json",
             "Sprout Modern (sapling)": Path(__file__).parent.parent / "logs" / "eval" / "modern_sapling_eval_results.json",
         },

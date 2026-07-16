@@ -8,7 +8,6 @@ import torch
 import torch.nn.functional as F
 
 from sprout.eval import Evaluator
-from sprout.modern.config import Config
 from sprout.tokenizer import FastBPETokenizer
 
 

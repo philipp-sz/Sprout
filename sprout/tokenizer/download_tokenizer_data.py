@@ -1,11 +1,12 @@
 import os
+from pathlib import Path
 
 from datasets import load_dataset, interleave_datasets
 from tqdm import tqdm
 
 
 total_documents = 20_000
-training_data_path = "./tokenizer_data_mixed_20k_v4.txt"
+training_data_path = Path(__file__).parent / "data" / "tokenizer_data_mixed_20k.txt"
 base1_ds = load_dataset("HuggingFaceFW/fineweb-edu", split="train", streaming=True).select_columns(["text"])
 base2_ds = load_dataset("mlfoundations/dclm-baseline-1.0", split="train", streaming=True).select_columns(["text"])
 code_ds = load_dataset("allenai/olmo-mix-1124", name="starcoder", split="train", streaming=True).select_columns(["text"])

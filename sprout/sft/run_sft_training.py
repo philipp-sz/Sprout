@@ -13,7 +13,7 @@ torch.set_float32_matmul_precision("high")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-tokenizer_path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_instruct_state.json"
+tokenizer_path = Path(__file__).parent.parent / "tokenizer" / "states" / "bpe_mixed_32k_20k_instruct_state.json"
 eot_token = FastBPETokenizer.load(tokenizer_path).eot_token
 checkpoint_path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling" / "model_final_instruct.pt"
 

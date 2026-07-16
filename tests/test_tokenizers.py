@@ -5,7 +5,7 @@ import pytest
 from sprout.tokenizer import BPETokenizer, FastBPETokenizer
 
 
-STATE_PATH = pathlib.Path(__file__).parent.parent / "sprout/tokenizer" / "bpe_tokenizer_state.json"
+STATE_PATH = pathlib.Path(__file__).parent.parent / "sprout" / "tokenizer" / "states" / "bpe_tokenizer_state.json"
 
 @pytest.fixture(scope="session", params=[BPETokenizer, FastBPETokenizer])
 def tokenizer(request):

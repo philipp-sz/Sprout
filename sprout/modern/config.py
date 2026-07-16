@@ -42,7 +42,7 @@ class Config:
     save_dir: Path = Path(__file__).parent.parent / "checkpoints" / "modern" / "sapling"
     shards_dir: Path = Path(__file__).parent.parent / "data" / "shards" / "train_shards_15b"
     log_path: Path = Path(__file__).parent.parent / "logs" / "train" / "sapling_training_log.json"
-    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_state.json"
+    tokenizer_path: Path = Path(__file__).parent.parent / "tokenizer" / "states" / "bpe_mixed_32k_20k_state.json"
 
     def __post_init__(self):
         self.head_dim = self.d_model // self.num_heads
