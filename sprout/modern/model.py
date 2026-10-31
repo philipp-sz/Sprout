@@ -86,6 +86,11 @@ class RotaryEmbedding(nn.Module):
         x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
 
+class CastRMSNorm(nn.RMSNorm):
+    """RMSNorm with fp32 weights that are cast to the input dtype, so bf16 inputs can use the fused kernel."""
+    def forward(self, x: Tensor) -> Tensor:
+        return F.rms_norm(x, self.normalized_shape, self.weight.to(x.dtype), self.eps)
+
 class MultiHeadAttention(nn.Module):
     """Causal Multi-Head Self-Attention module with Flash Attention support."""
     def __init__(self, config: Config) -> None:
@@ -101,8 +106,8 @@ class MultiHeadAttention(nn.Module):
         self.k_attn = nn.Linear(config.d_model, config.num_kv_heads * self.head_size, bias=False)
         self.v_attn = nn.Linear(config.d_model, config.num_kv_heads * self.head_size, bias=False)
         self.out_proj = nn.Linear(config.d_model, config.d_model, bias=False)
-        self.q_norm = nn.RMSNorm(self.head_size, dtype=torch.bfloat16)
-        self.k_norm = nn.RMSNorm(self.head_size, dtype=torch.bfloat16)
+        self.q_norm = CastRMSNorm(self.head_size)
+        self.k_norm = CastRMSNorm(self.head_size)
         self.out_proj.is_residual = True # Mark as residual for down scaling in weight initialization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.register_buffer("mask", torch.ones(config.max_seq_len, config.max_seq_len).tril().bool()) # Causal mask for attention
