@@ -20,10 +20,11 @@ def _worker_init(tokenizer_state_path: str) -> None:
     global _worker_tokenizer
     _worker_tokenizer = FastBPETokenizer.load(tokenizer_state_path)
 
-def _tokenize_doc(text: str) -> list[int]:
+def _tokenize_doc(text: str) -> dict[str, list[int]]:
+    """Tokenizes a document and appends the EOT token; returns a dict like the SFT tokenizer (one array per key)."""
     tokens = _worker_tokenizer.encode(text)
     tokens.append(_worker_tokenizer.eot_token)
-    return tokens
+    return {"tokens": tokens}
 
 class DatasetProcessor:
     """
@@ -38,13 +39,13 @@ class DatasetProcessor:
         shard_size (int): The number of samples per shard.
         num_tokens (int): The number of tokens to stream from the dataset.
         token_filter (Callable[[list[int]], bool], optional): A function to filter tokenized documents (e.g. by length). Defaults to None.
-        tokenize_fn (Callable[[str], list[int]]) : A function to tokenize documents. Defaults to _tokenize_doc.
+        tokenize_fn (Callable[[str], dict[str, list[int]]]): A function that tokenizes a document into named token arrays (at least "tokens"). Defaults to _tokenize_doc.
         worker_init (Callable[[str], None]): A function to initialize the worker processes. Defaults to _worker_init.
         text_key (str): The key in the dataset that contains the text to be tokenized. Defaults to "text".
     """
     def __init__(self, dataset_mixture: dict[IterableDataset, float], metadata_path: str, output_dir: str,
                 tokenizer_state_path: str,num_workers: int, imap_chunksize: int, shard_size: int, num_tokens: int,
-                token_filter: Callable[[list[int]], bool] | None = None, tokenize_fn: Callable[[str], list[int]] = _tokenize_doc,
+                token_filter: Callable[[list[int]], bool] | None = None, tokenize_fn: Callable[[str], dict[str, list[int]]] = _tokenize_doc,
                 worker_init: Callable[[str], None] = _worker_init, text_key: str = "text") -> None:
         self.dataset_mixture = dataset_mixture
         self.metadata_path = Path(metadata_path)
@@ -213,8 +214,18 @@ class TokenDataLoader:
         """Loads the next shard of token IDs into memory and resets the current position."""
         self.shard_files = self._get_shard_files() # Refresh the list of shard files in case new shards have been added
         self.shard_idx = (self.shard_idx + 1) % len(self.shard_files) # Increment index and wrap around if end of shard list is reached
-        self.shard_tokens = np.load(self.shard_files[self.shard_idx])
+        self._load_shard(self.shard_idx)
         self.cur_pos = 0
+
+    def _load_shard(self, shard_idx: int) -> None:
+        """Loads the token IDs of a shard into memory (overridden by loaders with other shard formats)."""
+        self.shard_tokens = np.load(self.shard_files[shard_idx])
+
+    def reset(self) -> None:
+        """Restarts the loader at the beginning of its first shard."""
+        self.shard_idx = -1
+        self.cur_pos = 0
+        self.shard_tokens = None
 
     @property
     def get_state(self) -> dict[str, int]:
@@ -227,6 +238,9 @@ class TokenDataLoader:
     @get_state.setter
     def set_state(self, state: dict[str, int]) -> None:
         """Sets the state of the data loader to the specified shard index and position."""
+        if state["shard_idx"] < 0: # No shard was loaded when the state was saved
+            self.reset()
+            return
         self.shard_idx = state["shard_idx"]
+        self._load_shard(self.shard_idx)
         self.cur_pos = state["cur_pos"]
-        self.shard_tokens = np.load(self.shard_files[self.shard_idx])

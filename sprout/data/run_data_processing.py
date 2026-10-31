@@ -9,8 +9,8 @@ from sprout.data.data_processing import DatasetProcessor
 num_tokens = 15_000_000_000
 shard_size = 100_000_000
 tokenizer_state_path = Path(__file__).parent.parent / "tokenizer" / "bpe_mixed_32k_20k_v4_state.json"
-metadata_path = Path(__file__).parent.parent / "metadata" / "metadata_train_15b.json"
-output_dir = Path(__file__).parent.parent / "shards" / "train_shards_15b"
+metadata_path = Path(__file__).parent / "metadata" / "metadata_train_15b.json"
+output_dir = Path(__file__).parent / "shards" / "train_shards_15b"
 base1_ds = load_dataset("HuggingFaceFW/fineweb-edu", split="train", streaming=True).select_columns(["text"])
 base2_ds = load_dataset("mlfoundations/dclm-baseline-1.0", split="train", streaming=True).select_columns(["text"])
 code_ds = load_dataset("allenai/olmo-mix-1124", name="starcoder", split="train", streaming=True).select_columns(["text"])
