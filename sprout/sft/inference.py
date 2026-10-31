@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 
+from sprout.modern.inference import feed_tokens
 from sprout.sft.sft_config import SFTConfig
 from sprout.modern.model import TransformerDecoder, KVCache
 from sprout.tokenizer import FastBPETokenizer
@@ -11,16 +12,17 @@ from sprout.utils import apply_repetition_penalty, apply_top_k_top_p_filtering
 
 @torch.no_grad()
 def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: SFTConfig, max_new_tokens: int, temperature: float,
-            top_k: int = None, top_p: float = None, repetition_penalty: float = 1.2, eot_token: int = 32769, system_prompt: str = None) -> None:
+            top_k: int = None, top_p: float = None, repetition_penalty: float = 1.2, system_prompt: str = None) -> None:
     model.eval()
     running = True
     kv_cache = KVCache(config, batch_size=1)
+    im_end_token = tokenizer.special_tokens["<|im_end|>"]
+    conversation = [] # All tokens of the conversation so far, needed to re-prefill the sliding window
 
     if system_prompt is not None:
-        system_message = f"<|im_start|>system\n{system_prompt}\n<|im_end|>\n"
-        system_tokens = tokenizer.encode(system_message)
-        system_token_tensor = torch.tensor(system_tokens, dtype=torch.long, device=config.device).unsqueeze(0)
-        model_output = model(system_token_tensor, kv_cache=kv_cache)
+        # Header and content are encoded separately, exactly like in the SFT data (sft_data_processing.py)
+        conversation = tokenizer.encode("<|im_start|>system\n") + tokenizer.encode(f"{system_prompt}<|im_end|>\n")
+        feed_tokens(model, kv_cache, conversation, len(conversation), config.device)
 
     while running:
         prompt = input("Enter your prompt (or type 'exit' to quit): ")
@@ -29,14 +31,13 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: SFT
             break
 
         print(f"\nYou: {prompt}")
-        prompt_text = f"<|im_start|>user\n{prompt}\n<|im_end|>\n<|im_start|>assistant\n"
-        prompt_tokens = tokenizer.encode(prompt_text)
-        prompt_token_tensor = torch.tensor(prompt_tokens, dtype=torch.long, device=config.device).unsqueeze(0) # Shape: [1, seq_len]
-        model_output = model(prompt_token_tensor, kv_cache=kv_cache) # Prefill the KV cache with the prompt tokens
+        prompt_tokens = tokenizer.encode("<|im_start|>user\n") + tokenizer.encode(f"{prompt}<|im_end|>\n")
+        prompt_tokens += tokenizer.encode("<|im_start|>assistant\n")
+        conversation.extend(prompt_tokens)
+        next_token_logits = feed_tokens(model, kv_cache, conversation, len(prompt_tokens), config.device) # Prefill the KV cache with the prompt tokens
 
         turn_tokens = []
         for _ in range(max_new_tokens):
-            next_token_logits = model_output[:, -1, :].clone()
             new_token_logits = apply_repetition_penalty(next_token_logits, turn_tokens, penalty=repetition_penalty)
             new_token_logits /= temperature
             new_token_logits = apply_top_k_top_p_filtering(new_token_logits, top_k=top_k, top_p=top_p)
@@ -44,30 +45,16 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: SFT
             probabilities = torch.softmax(new_token_logits, dim=-1)
             next_token = torch.multinomial(probabilities, num_samples=1)
 
-            turn_tokens.append(next_token.item())
-            model_output = model(next_token, kv_cache=kv_cache)
-
-            if next_token.item() == eot_token:
+            if next_token.item() == im_end_token:
                 break
+            turn_tokens.append(next_token.item())
+            conversation.append(next_token.item())
+            next_token_logits = feed_tokens(model, kv_cache, conversation, 1, config.device)
 
-        if turn_tokens and turn_tokens[-1] == eot_token:
-            out_tokens = turn_tokens[:-1]
-        elif turn_tokens[-1] != eot_token:
-            out_tokens = turn_tokens
-
-        response = tokenizer.decode(turn_tokens)
-        out_response = tokenizer.decode(out_tokens)
-        print(f"\nSprout: {out_response}")
-
-        if not response.strip().endswith("<|im_end|>"):
-            added_text = "<|im_end|>\n"
-            response += added_text
-        else:
-            added_text = "\n"
-            response += added_text
-        missing_tokens = tokenizer.encode(added_text)
-        missing_token_tensor = torch.tensor(missing_tokens, dtype=torch.long, device=config.device).unsqueeze(0)
-        _ = model(missing_token_tensor, kv_cache=kv_cache)
+        print(f"\nSprout: {tokenizer.decode(turn_tokens)}")
+        closing_tokens = tokenizer.encode("<|im_end|>\n") # Close the turn exactly like in the training data
+        conversation.extend(closing_tokens)
+        feed_tokens(model, kv_cache, conversation, len(closing_tokens), config.device)
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")

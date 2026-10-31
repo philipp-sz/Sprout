@@ -1,5 +1,3 @@
-import warnings
-
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
@@ -18,27 +16,23 @@ class KVCache:
         self.k_cache = torch.zeros(config.num_layers, batch_size, config.num_kv_heads, config.max_seq_len, config.head_dim, device=config.device, dtype=config.dtype)
         self.v_cache = torch.zeros(config.num_layers, batch_size, config.num_kv_heads, config.max_seq_len, config.head_dim, device=config.device, dtype=config.dtype)
 
-    def update(self, layer_idx: int, k_new: torch.Tensor, v_new: torch.Tensor, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Updates the cache with new keys and values for the current decoding step."""
-        next_pos = self.cur_step + seq_len
-        shift_amt = max(0, next_pos - self.max_seq_len)
-        if shift_amt > 0:
-            if layer_idx == 0: 
-                warnings.warn("KV Cache overflow: maximum sequence length exceeded. Oldest token will be dropped. Will cause inefficiency.")
-            self.k_cache[:, :, :, :-shift_amt, :] = self.k_cache[:, :, :, shift_amt:, :].clone()
-            self.v_cache[:, :, :, :-shift_amt, :] = self.v_cache[:, :, :, shift_amt:, :].clone()
-            start_idx = self.cur_step - shift_amt
-            end_idx = start_idx + seq_len
-        else:
-            start_idx = self.cur_step
-            end_idx = next_pos
+    def update(self, layer_idx: int, k_new: torch.Tensor, v_new: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Writes the new keys and values of one layer and returns all cached keys and values of that layer."""
+        end_idx = self.cur_step + k_new.size(-2)
+        if end_idx > self.max_seq_len:
+            raise ValueError(f"KV cache overflow: {end_idx} tokens exceed max_seq_len={self.max_seq_len}. Re-prefill a shorter window.")
 
-        self.k_cache[layer_idx, :, :, start_idx:end_idx, :] = k_new
-        self.v_cache[layer_idx, :, :, start_idx:end_idx, :] = v_new
-        if layer_idx == self.k_cache.size(0) - 1: # Only update once per forward pass
-            self.cur_step = end_idx
-
+        self.k_cache[layer_idx, :, :, self.cur_step:end_idx, :] = k_new
+        self.v_cache[layer_idx, :, :, self.cur_step:end_idx, :] = v_new
         return self.k_cache[layer_idx, :, :, :end_idx, :], self.v_cache[layer_idx, :, :, :end_idx, :]
+
+    def reset(self) -> None:
+        """Empties the cache; old entries are overwritten by the next update."""
+        self.cur_step = 0
+
+    def advance(self, seq_len: int) -> None:
+        """Moves the insert position forward once all layers have processed the new tokens."""
+        self.cur_step += seq_len
 
     @property
     def current_step(self) -> int:
@@ -60,14 +54,14 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self, q: Tensor, k: Tensor, seq_len: int, pos_offset: int | None = None) -> Tensor:
         """Applies rotary positional embeddings to the input tensor."""
-        if seq_len > self.max_seq_len: # Recompute cache if sequence length exceeds current max
-            self.max_seq_len = seq_len
-            self._set_cos_sin_cache(seq_len)
+        if pos_offset + seq_len > self.max_seq_len: # Extend the cache if positions go beyond the precomputed ones
+            self._set_cos_sin_cache(pos_offset + seq_len)
 
         return self._apply_rotary_pos_emb(q, k, seq_len, pos_offset)
 
     def _set_cos_sin_cache(self, seq_len: int) -> None:
         """Precomputes and caches the cosine and sine values for the given sequence length."""
+        self.max_seq_len = seq_len
         t = torch.arange(seq_len, device=self.inv_freq.device).float()
         freqs = torch.outer(t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1) # Duplicate frequencies to work with head_dim
@@ -128,7 +122,7 @@ class MultiHeadAttention(nn.Module):
         v = v.transpose(1, 2)
 
         if kv_cache is not None:
-            k, v = kv_cache.update(layer_idx=layer_idx, k_new=k, v_new=v, seq_len=T)
+            k, v = kv_cache.update(layer_idx=layer_idx, k_new=k, v_new=v)
 
         attn_mask = None
         is_causal = False
@@ -223,6 +217,8 @@ class TransformerDecoder(nn.Module):
         for i, layer in enumerate(self.layers):
             layer_idx = i if kv_cache is not None else None
             x = layer(x, kv_cache=kv_cache, layer_idx=layer_idx)
+        if kv_cache is not None: # Advance once per forward pass, after every layer has written its keys and values
+            kv_cache.advance(input_ids.size(1))
 
         x = self.norm(x)
         return self.lm_head(x)

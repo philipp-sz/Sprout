@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import torch
+from torch import Tensor
 
 from sprout.modern.config import Config
 from sprout.modern.model import TransformerDecoder, KVCache
@@ -10,18 +11,31 @@ from sprout.utils import apply_repetition_penalty, apply_top_k_top_p_filtering
 
 
 @torch.no_grad()
+def feed_tokens(model: TransformerDecoder, kv_cache: KVCache, token_ids: list[int], num_new_tokens: int, device: str) -> Tensor:
+    """Feeds the last num_new_tokens of token_ids through the model and returns the logits of the last position."""
+    assert num_new_tokens > 0, "At least one new token is needed."
+    new_tokens = token_ids[-num_new_tokens:]
+    max_seq_len = kv_cache.max_seq_len
+    if kv_cache.current_step + num_new_tokens > max_seq_len:
+        # Sliding window: restart the cache with the most recent tokens, so positions stay within the trained range.
+        # Keeping half a context means this full re-prefill only happens every ~max_seq_len / 2 tokens.
+        window = min(max_seq_len, max(max_seq_len // 2, num_new_tokens))
+        new_tokens = token_ids[-window:]
+        kv_cache.reset()
+
+    input_ids = torch.tensor(new_tokens, dtype=torch.long, device=device).unsqueeze(0) # Shape: [1, seq_len]
+    return model(input_ids, kv_cache=kv_cache)[:, -1, :]
+
+@torch.no_grad()
 def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Config, prompt: str,
             max_new_tokens: int, temperature: float, top_k: int = None, top_p: float = None, repetition_penalty: float = 1.2) -> str:
     model.eval()
     print(prompt, end="", flush=True)
-    token_ids_list = tokenizer.encode(prompt)
-    token_ids = torch.tensor(token_ids_list, dtype=torch.long, device=config.device).unsqueeze(0) # Shape: [1, seq_len]
+    generated_tokens = tokenizer.encode(prompt)
     kv_cache = KVCache(config, batch_size=1)
-    model_output = model(token_ids, kv_cache=kv_cache) # Prefill the KV cache with the prompt tokens
+    next_token_logits = feed_tokens(model, kv_cache, generated_tokens, len(generated_tokens), config.device) # Prefill the KV cache with the prompt tokens
 
-    generated_tokens = list(token_ids_list)
     for _ in range(max_new_tokens):
-        next_token_logits = model_output[:, -1, :].clone()
         new_token_logits = apply_repetition_penalty(next_token_logits, generated_tokens, penalty=repetition_penalty)
         new_token_logits /= temperature
         new_token_logits = apply_top_k_top_p_filtering(new_token_logits, top_k=top_k, top_p=top_p)
@@ -33,7 +47,7 @@ def generate(model: TransformerDecoder, tokenizer: FastBPETokenizer, config: Con
             break
 
         generated_tokens.append(next_token.item())
-        model_output = model(next_token, kv_cache=kv_cache)
+        next_token_logits = feed_tokens(model, kv_cache, generated_tokens, 1, config.device)
         print(tokenizer.decode([next_token.item()]), end="", flush=True) # Stream generated tokens
 
     return tokenizer.decode(generated_tokens)
