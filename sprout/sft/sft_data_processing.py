@@ -74,13 +74,13 @@ class SFTDataLoader(TokenDataLoader):
         if self.shard_tokens is None:
             self._load_next_shard()
 
-        idx_first = torch.searchsorted(self.eot_positions, self.cur_pos)
-        idx_last = torch.searchsorted(self.eot_positions, self.cur_pos + seq_len - 1, right=True) - 1
+        idx_first = int(torch.searchsorted(self.eot_positions, self.cur_pos)) # EOT that ends the current conversation
+        idx_last = int(torch.searchsorted(self.eot_positions, self.cur_pos + seq_len - 1, right=True)) - 1 # Last EOT that fits
         if idx_first >= len(self.eot_positions): # Shard is exhausted
             self._load_next_shard()
             return self._build_row(seq_len)
         elif idx_last >= idx_first: # No remaining batch budget
-            conv_len = self.eot_positions[idx_last] - self.cur_pos + 1
+            conv_len = int(self.eot_positions[idx_last]) - self.cur_pos + 1
             pad_len = seq_len - conv_len
             pad_chunk = torch.tensor([self.eot_token] * pad_len, dtype=torch.long)
 
@@ -90,19 +90,13 @@ class SFTDataLoader(TokenDataLoader):
             mask_chunk = torch.cat((mask_chunk, torch.zeros(pad_len, dtype=torch.uint8)), dim=0)
             self.cur_pos += conv_len
             return tokens_chunk, mask_chunk
-        else: # First sequence is too long
-            if idx_first + 1 >= len(self.eot_positions):
-                self._load_next_shard()
-            else:
-                self.cur_pos = self.eot_positions[idx_first + 1] + 1
+        else: # First conversation is too long: skip it and continue with the next one
+            self.cur_pos = int(self.eot_positions[idx_first]) + 1
             return self._build_row(seq_len)
 
-    def _load_next_shard(self) -> None:
-        """Loads the next shard of token IDs and masks into memory and resets the current position."""
-        self.shard_files = self._get_shard_files()
-        self.shard_idx = (self.shard_idx + 1) % len(self.shard_files)
-        loaded_file = np.load(self.shard_files[self.shard_idx])
+    def _load_shard(self, shard_idx: int) -> None:
+        """Loads the token IDs and masks of a shard into memory and finds the conversation boundaries."""
+        loaded_file = np.load(self.shard_files[shard_idx])
         self.shard_tokens = torch.tensor(loaded_file["tokens"], dtype=torch.long)
         self.shard_masks = torch.tensor(loaded_file["mask"], dtype=torch.uint8)
         self.eot_positions = torch.where(self.shard_tokens == self.eot_token)[0]
-        self.cur_pos = 0
