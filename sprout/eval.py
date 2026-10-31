@@ -27,7 +27,7 @@ class Evaluator:
         self.model = model
         self.device = device
         self.tokenizer = tokenizer
-        self.prefix_token_id = torch.tensor(prefix_token_id, dtype=torch.long) if prefix_token_id is not None else None
+        self.prefix_tokens = [prefix_token_id] if prefix_token_id is not None else []
 
     def run_standard_suite(self, total_samples: int | None = None) -> dict[str, float]:
         """Loads datasets and runs the standard benchmark suite, including LAMBADA, ARC Easy, ARC Challenge, and HellaSwag."""
@@ -75,9 +75,11 @@ class Evaluator:
 
         with torch.no_grad():
             for batch_input, batch_labels in zip(input_tokens, label_tokens):
-                if self.prefix_token_id is not None:
-                    batch_input = torch.cat([self.prefix_token_id.unsqueeze(0).to(self.device), batch_input], dim=-1)
-                    batch_labels = torch.cat([batch_input[1:2], batch_labels])
+                if self.prefix_tokens:
+                    # Prepend the prefix and drop the last token, so the sequence keeps its length (max_seq_len)
+                    prefix = torch.tensor(self.prefix_tokens, dtype=torch.long, device=batch_input.device)
+                    batch_labels = torch.cat([batch_input[:1], batch_labels[:-1]])
+                    batch_input = torch.cat([prefix, batch_input[:-1]])
 
                 batch_input = batch_input.unsqueeze(0).to(self.device)
                 batch_labels = batch_labels.to(self.device)
@@ -163,11 +165,11 @@ class Evaluator:
     def _loglikelihood_context(self, context: str, choice: str) -> tuple[float, bool]:
         """Compute length-normalized log-likelihood of a completion given a context."""
         self.model.eval()
-        context_tokens = self.tokenizer.encode(context)
+        context_tokens = self.prefix_tokens + self.tokenizer.encode(context)
         context_len = len(context_tokens)
 
         full_string = context + choice
-        full_tokens = self.tokenizer.encode(full_string)
+        full_tokens = self.prefix_tokens + self.tokenizer.encode(full_string)
         choice_len = len(full_tokens) - context_len
         if choice_len <= 0:
             warnings.warn("Choice is empty or fully truncated, cannot compute log-likelihood.")
