@@ -215,6 +215,7 @@ class Trainer:
         print(border)
 
     def _save_final(self):
+        self.config.save_dir.mkdir(parents=True, exist_ok=True)
         torch.save({
             "model": self.model.state_dict(),
             "config": self.config.to_dict(),
